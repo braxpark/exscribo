@@ -305,21 +305,21 @@ int main(int argc, char** argv)
                 std::string tableCol = fkeys[tableName][dep];
                 std::string mappedTableCol = fkeyCols[dep][tableCol];
                 std::vector<std::string> values = tableColValues[dep][fkeyCols[dep][fkeys[tableName][dep]]];
-                std::string currentTableentCondition = "";
+                std::string currentCondition = "";
                     if(first) {
-                        currentTableentCondition = "WHERE ";
+                        currentCondition = "WHERE ";
                         first = false;
                     } else {
-                        currentTableentCondition = " AND ";
+                        currentCondition = " AND ";
                     }
-                    currentTableentCondition += ("\"" + fkeys[tableName][dep]);
-                    currentTableentCondition += "\" IN (";
+                    currentCondition += ("\"" + fkeys[tableName][dep]);
+                    currentCondition += "\" IN (";
 
                 if(values.size() > 0) {
-                    currentTableentCondition += valuesFromVector(values);
-                } else currentTableentCondition += "NULL";
-                currentTableentCondition += ")";
-                whereCondition += currentTableentCondition;
+                    currentCondition += valuesFromVector(values);
+                } else currentCondition += "NULL";
+                currentCondition += ")";
+                whereCondition += currentCondition;
             }
             return whereCondition;
         };
