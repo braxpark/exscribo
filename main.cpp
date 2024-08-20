@@ -217,8 +217,6 @@ int main(int argc, char** argv)
                 if(seen.count(foo) == 0) {
                     seen.insert(foo);
                     q.push(foo);
-                    //std::cout << "Newly seen: " << foo << '\n';
-                    //std::cout << "Column Name for FKEY: " << colName << '\n';
                 }
                 // deps[B] = [A..] B depends on
                 // inv[A] = [B..] A supports 
@@ -349,7 +347,7 @@ int main(int argc, char** argv)
             whereCondition(tableName);
             std::cout << query << "\n";
             std::string copyQuery = "COPY(" + query + ") TO '/tmp/" + tableName + ".csv' WITH DELIMITER ',' CSV";
-            //std::cout << "copy Query: " << copyQuery << '\n';
+            std::cout << "copy Query: " << copyQuery << '\n';
             bool ran = false;
             bool first = true;
             std::vector<std::string> colNames;
@@ -405,16 +403,10 @@ int main(int argc, char** argv)
         };
 
         std::vector<std::string> dataSearchOrder = {argv[1]};
-        for(int i = L.size() - 1; i >= 0; i--) {
-            if(L[i] == argv[1]) continue;
-            dataSearchOrder.push_back(L[i]);
-        }
-        for(int i = 0; i < dataSearchOrder.size(); i++) {
-            runTable(dataSearchOrder[i]);
-        }
         std::cout << "<-------------------------------------------->\nORDER:\n";
         for(auto& l : L) {
-        std::cout << l << '\n';
+            runTable(l);
+            std::cout << l << '\n';
         }
 
 
