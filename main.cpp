@@ -26,6 +26,8 @@ struct DatabaseInfo {
     std::string password;
 };
 
+enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
+
 void parseFileIntoConfig(const std::string& fileName, DatabaseInfo& config) {
     // Assume file exists and is accessible
     std::ifstream ifs(fileName);
@@ -91,20 +93,9 @@ std::string getRowsByFKEYQuery(const std::string& tableName, const std::string& 
     return (R"(
         SELECT
             *
-        FROM
-
-    )" + 
-    tableName + 
-    R"(
-        WHERE   
-    )" +
-    colName + 
-    R"(
-     = 
-    )" + 
-    value +
-    where
-    );
+        FROM )" + tableName +
+    R"( WHERE )" + colName +
+    R"( = )" + value + where );
 }
 
 std::string getSupporterQuery(const std::string& tableName) {
@@ -121,8 +112,6 @@ std::string getForeignKeyQuery(const std::string& tableName) {
     return getChildrenQuery + tableName + "'";
 }
 
-enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
-
 PGDataType getPGDataType(const std::string& dataType) {
     if(dataType == "integer") return PGDataType::INTEGER;
     else if(dataType == "bigint") return PGDataType::BIGINT;
@@ -136,6 +125,7 @@ PGDataType getPGDataType(const std::string& dataType) {
     return PGDataType::OTHER;
 }
 
+// is there a better way of pattern matching?
 bool pgDataTypeNeedsEnclosedQuotes(const PGDataType& dataType) {
     std::vector<PGDataType> encloseds = { PGDataType::CHARACTERVARYING, PGDataType::TEXT, PGDataType::JSONB, PGDataType::TIMESTAMPNOTIMEZONE, PGDataType::DATE, PGDataType::OTHER };
     for(auto& dt : encloseds) {
@@ -198,56 +188,53 @@ int main(int argc, char** argv)
         q.push(std::string(argv[1]));
         seen.insert(std::string(argv[1]));
         while(!q.empty()) {
-            std::string curr = q.front();
+            std::string currentTable = q.front();
             q.pop();
 
-            std::string query = getForeignKeyQuery(curr);
-            std::string supporter = getSupporterQuery(curr);
+            std::string query = getForeignKeyQuery(currentTable);
+            std::string supporter = getSupporterQuery(currentTable);
             conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
                 std::vector<std::string> cols;
-                auto foo = to<std::string>(r["tableName"]);
+                auto dependentTable = to<std::string>(r["tableName"]);
                 auto colName = to<std::string>(r["column_name"]);
                 auto foreignColName = to<std::string>(r["foreign_column_name"]);
-                fkeyCols[curr][colName] = foreignColName;
-                tableFkeyNeeds[curr].insert(foreignColName);
-                    fkeys[foo][curr] = colName; // supporter's col name 
-                    invFkeys[curr][foo] = colName;
-                if(seen.count(foo) == 0) {
-                    seen.insert(foo);
-                    q.push(foo);
+                fkeyCols[currentTable][colName] = foreignColName;
+                tableFkeyNeeds[currentTable].insert(foreignColName);
+                    fkeys[dependentTable][currentTable] = colName; // supporter's col name
+                    invFkeys[currentTable][dependentTable] = colName;
+                if(seen.count(dependentTable) == 0) {
+                    seen.insert(dependentTable);
+                    q.push(dependentTable);
                 }
-                // deps[B] = [A..] B depends on
-                // inv[A] = [B..] A supports 
-                deps[foo].insert(curr);
-                inv[curr].insert(foo);
-                tableOrder.push_back(foo);
+                // deps[B] = B depends on [..A]
+                // inv[A] = A supports [..B]
+                deps[dependentTable].insert(currentTable);
+                inv[currentTable].insert(dependentTable);
+                tableOrder.push_back(dependentTable);
             },
             query);
             conn.execute([&](auto&& r){
                 using dmitigr::pgfe::to;
                 auto tableName = to<std::string>(r["foreign_table_name"]);
-                std::cout << curr << " depends on: " << tableName << '\n';
+                std::cout << currentTable << " depends on: " << tableName << '\n';
                 if(seen.count(tableName) == 0) {
                     seen.insert(tableName);
                     q.push(tableName);
                 }
-                deps[curr].insert(tableName);
-                inv[tableName].insert(curr);
+                deps[currentTable].insert(tableName);
+                inv[tableName].insert(currentTable);
                 
             }, supporter);
-            std::string colQuery = getTableFieldsAndDataTypes(curr);
-            //std::cout << colQuery << '\n';
+            std::string colQuery = getTableFieldsAndDataTypes(currentTable);
             conn.execute([&](auto&& r) {
                 using dmitigr::pgfe::to;
                 std::string colName = to<std::string>(r["column_name"]);
                 std::string isNullable = to<std::string>(r["is_nullable"]);
                 std::string dataType = to<std::string>(r["data_type"]);
-                tableCols[curr][colName].isNullable = isNullable == "YES" ? true : false;
-                tableCols[curr][colName].dataType = getPGDataType(dataType);
-
-                //std::cout << colName << " " << isNullable << " " << dataType  << '\n';
+                tableCols[currentTable][colName].isNullable = isNullable == "YES" ? true : false;
+                tableCols[currentTable][colName].dataType = getPGDataType(dataType);
             }, colQuery);
         }
         auto depCopy = deps;
@@ -279,20 +266,20 @@ int main(int argc, char** argv)
 
         // https://en.wikipedia.org/wiki/Topological_sorting#:~:text=.-,Kahn%27s%20algorithm,-%5Bedit%5D
         while(!S.empty()) {
-            std::string curr = S.front();
-            std::cout << "S.front(): " << curr << '\n';
+            std::string currentTable = S.front();
+            std::cout << "S.front(): " << currentTable << '\n';
             S.pop();
-            L.push_back(curr);
+            L.push_back(currentTable);
             std::vector<std::string> toErase;
-            for(std::string m : inv[curr]) {
+            for(std::string m : inv[currentTable]) {
                 toErase.push_back(m);
                 if(deps[m].size() == 1) {
                     S.push(m);
                 }  
             }
             for(auto& erase : toErase) {
-                inv[curr].erase(erase);
-                deps[erase].erase(curr);
+                inv[currentTable].erase(erase);
+                deps[erase].erase(currentTable);
             }
         }
         
@@ -309,6 +296,7 @@ int main(int argc, char** argv)
             },
             ("select * from " + std::string(argv[1]) + " where id = " + std::string(argv[2])));
 
+        // maybe need to rethink this
         auto whereCondition = [&](std::string tableName) {
             std::string whereCondition = "";
             std::cout << tableName << '\n';
@@ -317,24 +305,25 @@ int main(int argc, char** argv)
                 std::string tableCol = fkeys[tableName][dep];
                 std::string mappedTableCol = fkeyCols[dep][tableCol];
                 std::vector<std::string> values = tableColValues[dep][fkeyCols[dep][fkeys[tableName][dep]]];
-                std::string currentCondition = "";
+                std::string currentTableentCondition = "";
                     if(first) {
-                        currentCondition = "WHERE ";
+                        currentTableentCondition = "WHERE ";
                         first = false;
                     } else {
-                        currentCondition = " AND ";
+                        currentTableentCondition = " AND ";
                     }
-                    currentCondition += ("\"" + fkeys[tableName][dep]);
-                    currentCondition += "\" IN (";
+                    currentTableentCondition += ("\"" + fkeys[tableName][dep]);
+                    currentTableentCondition += "\" IN (";
 
                 if(values.size() > 0) {
-                    currentCondition += valuesFromVector(values);
-                } else currentCondition += "NULL";
-                currentCondition += ")";
-                whereCondition += currentCondition;
+                    currentTableentCondition += valuesFromVector(values);
+                } else currentTableentCondition += "NULL";
+                currentTableentCondition += ")";
+                whereCondition += currentTableentCondition;
             }
             return whereCondition;
         };
+
         int64_t totalRows = 0;
         auto runTable = [&](const std::string& tableName) {
             std::string query = R"(
