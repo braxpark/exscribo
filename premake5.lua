@@ -1,5 +1,5 @@
 workspace("cpp_schema")
-configurations({ "Debug", "Releas" })
+configurations({ "Debug", "Release" })
 
 local projectName = "cpp_schema"
 local projectKind = "ConsoleApp"
@@ -17,13 +17,12 @@ local excludeSrcFiles = {
 }
 
 project(projectName)
-kind(projectKind)
-language(lang)
-cppdialect(standard)
-targetdir("bin/%{cfg.buildcfg}")
-location("src/")
-
-files(srcFiles)
-removefiles({ excludeSrcFiles })
-includedirs({ includePath })
-links({ "pq" })
+	kind(projectKind)
+	language(lang)
+	cppdialect(standard)
+	targetdir("bin/%{cfg.buildcfg}")
+	location("src/")
+	files(srcFiles)
+	removefiles({ excludeSrcFiles })
+	includedirs({ includePath })
+	links({ "pq" })
