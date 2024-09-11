@@ -4,13 +4,13 @@
       "/usr/bin/g++",
       "-c",
       "-std=c++20",
-      "-I/opt/homebrew/opt/libpq/include",
+      "-I/usr/include/postgresql/",
       "-o",
       "main",
       "main.cpp"
     ],
-    "directory": "/Users/braxtonparker/projects/foo",
-    "file": "/Users/braxtonparker/projects/foo/main.cpp",
-    "output": "/Users/braxtonparker/projects/foo/main"
+    "directory": "~/projects/cpp_schema/",
+    "file": "~/projects/cpp_schema/main.cpp",
+    "output": "~/projects/cpp_schema/main"
   }
 ]
