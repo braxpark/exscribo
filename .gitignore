@@ -37,3 +37,4 @@ test.*
 
 /bin
 /src/bin
+/src/Makefile
