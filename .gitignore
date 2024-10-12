@@ -40,3 +40,5 @@ test.*
 /src/Makefile
 
 Makefile*
+
+dataSource.json
