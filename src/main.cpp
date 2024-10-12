@@ -1,6 +1,7 @@
 #include "include/src/pgfe/data.hpp"
 #include "include/src/pgfe/exceptions.hpp"
 #include "include/src/pgfe/pgfe.hpp"
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -21,9 +22,10 @@ struct DatabaseInfo {
 
 enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
 
-void parseFileIntoConfig(const std::string& fileName, DatabaseInfo& config) {
+void parseFileIntoConfig(const std::string fileName, DatabaseInfo& config) {
     // Assume file exists and is accessible
     std::ifstream ifs(fileName);
+    assert(ifs.good());
     std::string content( (std::istreambuf_iterator<char>(ifs) ), (std::istreambuf_iterator<char>()));
     std::stringstream ssContent(content);
     struct_mapping::reg(&DatabaseInfo::host, "host");
@@ -135,10 +137,10 @@ struct ColInfo {
 
 int main(int argc, char** argv)
 {
-    //DatabaseInfo config;
-    //parseFileIntoConfig("test.json", config);
-    //std::cout << config.host << " - " << config.dbName << " - " << config.username << " - " << config.password << '\n';
-    //std::cout << "Params: \n";
+    DatabaseInfo config;
+    parseFileIntoConfig("dataSource.json", config);
+    std::cout << config.host << " - " << config.dbName << " - " << config.username << " - " << config.password << '\n';
+    std::cout << "Params: \n";
     for(int i = 0; i < argc; i++) {
         std::cout << argv[i] <<  '\n';
     }
@@ -148,18 +150,18 @@ int main(int argc, char** argv)
     try {
         pgfe::Connection conn{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
-            .set_hostname("localhost")
-            .set_database("db_name")
-            .set_username("postgres")
-            .set_password("postgres")
-            .set_ssl_enabled(false)
+            .set_hostname(config.host)
+            .set_database(config.dbName)
+            .set_username(config.username)
+            .set_password(config.password)
+            .set_ssl_enabled(true)
         };
         conn.connect();
 
         pgfe::Connection local{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
             .set_hostname("localhost")
-            .set_database("db_name")
+            .set_database("deductions_app_development")
             .set_username("postgres")
             .set_password("postgres")
             //.set_ssl_enabled(true)
@@ -168,6 +170,7 @@ int main(int argc, char** argv)
         local.connect();
         
         std::unordered_set<std::string> seen;
+        std::unordered_map<std::string, bool> directDescendants;
         std::map<std::string, std::unordered_set<std::string>> deps;
         std::map<std::string, std::unordered_set<std::string>> inv;
         std::unordered_map<std::string, std::unordered_set<std::string>> locks;
@@ -180,12 +183,13 @@ int main(int argc, char** argv)
         std::queue<std::string> q;
         q.push(std::string(argv[1]));
         seen.insert(std::string(argv[1]));
+        directDescendants[std::string(argv[1])] = true;
         while(!q.empty()) {
             std::string currentTable = q.front();
             q.pop();
-
-            std::string query = getForeignKeyQuery(currentTable);
-            std::string supporter = getSupporterQuery(currentTable);
+            //std::cout << currentTable << '\n';
+            std::string dependants = getForeignKeyQuery(currentTable);
+            std::string supporters = getSupporterQuery(currentTable);
             conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
@@ -201,17 +205,21 @@ int main(int argc, char** argv)
                     seen.insert(dependentTable);
                     q.push(dependentTable);
                 }
+
                 // deps[B] = B depends on [..A]
                 // inv[A] = A supports [..B]
+                bool isDescendant = directDescendants[currentTable];
+                directDescendants[dependentTable] = directDescendants.count(currentTable) > 0;
+                //std::cout << "dependantTable - currentTable - is descendant " << dependentTable <<  " - " << currentTable << " - " << isDescendant << '\n';
                 deps[dependentTable].insert(currentTable);
                 inv[currentTable].insert(dependentTable);
                 tableOrder.push_back(dependentTable);
             },
-            query);
+            dependants);
             conn.execute([&](auto&& r){
                 using dmitigr::pgfe::to;
                 auto tableName = to<std::string>(r["foreign_table_name"]);
-                std::cout << currentTable << " depends on: " << tableName << '\n';
+                //std::cout << currentTable << " depends on: " << tableName << '\n';
                 if(seen.count(tableName) == 0) {
                     seen.insert(tableName);
                     q.push(tableName);
@@ -219,7 +227,7 @@ int main(int argc, char** argv)
                 deps[currentTable].insert(tableName);
                 inv[tableName].insert(currentTable);
                 
-            }, supporter);
+            }, supporters);
             std::string colQuery = getTableFieldsAndDataTypes(currentTable);
             conn.execute([&](auto&& r) {
                 using dmitigr::pgfe::to;
@@ -237,7 +245,8 @@ int main(int argc, char** argv)
         auto hasIncomingEdges =[&](const std::string& table) {
             return inv.count(table) > 0;
         };
-
+        
+        /*
         for(auto& d : deps) {
             std::cout << d.first << " depends on: ";
             for(auto& di: d.second) {
@@ -245,36 +254,92 @@ int main(int argc, char** argv)
             }
             std::cout << '\n';
         }
+        */
 
         // kahn's algorithm
         std::vector<std::string> L;
         std::queue<std::string> S;
 
+        std::vector<std::string> others; // NOT direct descendants;
+        //
+        for(auto& table : seen) {
+            if(directDescendants.count(table) == 0 || !directDescendants[table]) {
+                others.push_back(table);
+            }
+        }
+
         for(auto& table : seen) {
             if(deps[table].size() == 0) {
-                std::cout << "Adding: " << table << '\n';
+               // std::cout << "Adding: " << table << '\n';
                 S.push(table);
             }
         }   
 
+
+        auto invCopyS = inv;
+        auto depsCopyS = deps;
+
         // https://en.wikipedia.org/wiki/Topological_sorting#:~:text=.-,Kahn%27s%20algorithm,-%5Bedit%5D
         while(!S.empty()) {
             std::string currentTable = S.front();
-            std::cout << "S.front(): " << currentTable << '\n';
             S.pop();
             L.push_back(currentTable);
             std::vector<std::string> toErase;
-            for(std::string m : inv[currentTable]) {
+            for(std::string m : invCopyS[currentTable]) {
                 toErase.push_back(m);
-                if(deps[m].size() == 1) {
+                if(depsCopyS[m].size() == 1) {
                     S.push(m);
                 }  
             }
             for(auto& erase : toErase) {
-                inv[currentTable].erase(erase);
-                deps[erase].erase(currentTable);
+                invCopyS[currentTable].erase(erase);
+                depsCopyS[erase].erase(currentTable);
             }
         }
+
+        // kahns on the non direct descendants  -> inverted on the dep/supporter relationship
+        std::vector<std::string> othersL;
+        std::queue<std::string> O;
+        auto invCopyO = inv;
+        auto depsCopyO = deps;
+        for(auto& table : others) {
+            bool flag = false;
+            for(auto& t : inv[table]) {
+                bool othersContains = false;
+                for(auto o : others) {
+                    if(o != table && t == o) {
+                        othersContains = true;
+                        break;
+                    }
+                }
+                if(othersContains) {
+                    flag = true;
+                    break;
+                }
+            }
+            if(!flag) {
+                O.push(table);
+            }
+        }
+        
+        while(!O.empty()) {
+            std::string currentTable = O.front();
+            O.pop();
+            othersL.push_back(currentTable);
+            std::vector<std::string> toErase;
+            for(std::string m : invCopyS[currentTable]) {
+                toErase.push_back(m);
+                if(depsCopyS[m].size() == 1) {
+                    S.push(m);
+                }  
+            }
+            for(auto& erase : toErase) {
+                invCopyS[currentTable].erase(erase);
+                depsCopyS[erase].erase(currentTable);
+            }
+        }
+
+
         
         std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::string>>> tableColValues;
 
@@ -337,7 +402,6 @@ int main(int argc, char** argv)
             conn.execute([&](auto&& r)
             {   
                 using dmitigr::pgfe::to;
-                /*
                 std::vector<std::string> values;
                  std::string insertQuery;
                 if(!ran) {
@@ -384,18 +448,49 @@ int main(int argc, char** argv)
             */
         };
 
-        std::vector<std::string> dataSearchOrder = {argv[1]};
         std::cout << "<-------------------------------------------->\nORDER:\n";
         for(auto& l : L) {
-            runTable(l);
+            //runTable(l);
             std::cout << l << '\n';
         }
 
+        std::cout << "<--------------->\nDirect Descendants:\n";
+        for(auto& entry : directDescendants) {
+            if(entry.second) {
+                std::cout << entry.first << '\n';
+            }
+        }
+        std::cout << "<--------------->\nNOT Direct Descendants:\n";
+        for(auto& table : others) {
+            std::cout << table << '\n';
+        }
+        
+        std::cout << "<--------------------------------------------------\nDATA SEARCH:\n";
+        std::vector<std::string> descendantSet = {};
+        for(auto& l : L) {
+            if(directDescendants.count(l) > 0 && directDescendants[l]) {
+                std::cout << l << '\n';
+                descendantSet.push_back(l);
+            }
+        }
+        for(auto& l : othersL) {
+            std::cout << l << '\n';
+        }
+
+        assert(descendantSet.size() > 0 && descendantSet[0] == std::string(argv[1]));
+        
+
+        auto dataSearchTable = [&](const std::string& tableName){
+
+        };
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
         std::cout << "Program ran in: " << elapsedTime << '\n';
         std::cout << "Total Number of Rows: " << totalRows << '\n';
+        std::string foo = "foo";
+        auto stringMaxSize = foo.max_size();
+        std::cout << "Max string size: " << stringMaxSize << '\n';
 
     } catch (const pgfe::Server_exception& e) {
         std::cout << e.error().detail() << '\n';
