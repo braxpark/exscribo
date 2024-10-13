@@ -4,13 +4,13 @@
       "/usr/bin/g++",
       "-c",
       "-std=c++20",
-      "-I/usr/include/postgresql/",
+      "-I/opt/homebrew/include/postgresql@14/include",
       "-o",
       "main",
-      "main.cpp"
+      "src/main.cpp"
     ],
     "directory": "~/projects/cpp_schema/",
-    "file": "~/projects/cpp_schema/main.cpp",
-    "output": "~/projects/cpp_schema/main"
+    "file": "~/projects/cpp_schema/src/main.cpp",
+    "output": "~/projects/cpp_schema/bin/Debug/cpp_schema"
   }
 ]
