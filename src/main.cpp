@@ -4,12 +4,15 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <unordered_set>
 #include <vector>
 #include <map>
 #include "struct_mapping/struct_mapping.h"
+
+namespace fs = std::filesystem;
 
 namespace pgfe = dmitigr::pgfe;
 
@@ -77,7 +80,7 @@ std::string getTableFieldsAndDataTypes(const std::string& tableName) {
         FROM information_schema.columns WHERE table_name = ')" + tableName + "'";
 }
 
-std::string valuesFromVector(std::vector<std::string> vec, std::string delimiter = ",") {
+std::string valuesFromVector(const std::vector<std::string>& vec, const std::string& delimiter = ",") {
     std::stringstream s;
     copy(vec.begin(), vec.end(), std::ostream_iterator<std::string>(s, ","));
     return s.str().substr(0, s.str().length() - 1);
@@ -179,6 +182,8 @@ int main(int argc, char** argv)
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> fkeyCols;  // fkeyCols[table_foo][column_name] = foreign_column_name
         std::unordered_map<std::string, std::unordered_set<std::string>> tableFkeyNeeds;
         std::unordered_map<std::string, std::unordered_map<std::string, ColInfo>> tableCols;
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> tableDependencyFKeys;
+        std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::string>>> tableColValues;
         std::vector<std::string> tableOrder = {argv[1]};
         std::queue<std::string> q;
         q.push(std::string(argv[1]));
@@ -187,7 +192,6 @@ int main(int argc, char** argv)
         while(!q.empty()) {
             std::string currentTable = q.front();
             q.pop();
-            //std::cout << currentTable << '\n';
             std::string dependants = getForeignKeyQuery(currentTable);
             std::string supporters = getSupporterQuery(currentTable);
             conn.execute([&](auto&& r)
@@ -199,8 +203,13 @@ int main(int argc, char** argv)
                 auto foreignColName = to<std::string>(r["foreign_column_name"]);
                 fkeyCols[currentTable][colName] = foreignColName;
                 tableFkeyNeeds[currentTable].insert(foreignColName);
-                    fkeys[dependentTable][currentTable] = colName; // supporter's col name
-                    invFkeys[currentTable][dependentTable] = colName;
+                fkeys[dependentTable][currentTable] = colName; // supporter's col name
+                invFkeys[currentTable][dependentTable] = colName;
+    
+
+                tableDependencyFKeys[dependentTable][currentTable] = colName;
+
+
                 if(seen.count(dependentTable) == 0) {
                     seen.insert(dependentTable);
                     q.push(dependentTable);
@@ -208,9 +217,12 @@ int main(int argc, char** argv)
 
                 // deps[B] = B depends on [..A]
                 // inv[A] = A supports [..B]
+                
                 bool isDescendant = directDescendants[currentTable];
-                directDescendants[dependentTable] = directDescendants.count(currentTable) > 0;
-                //std::cout << "dependantTable - currentTable - is descendant " << dependentTable <<  " - " << currentTable << " - " << isDescendant << '\n';
+                directDescendants[dependentTable] = (directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) || directDescendants[dependentTable];
+                if(dependentTable == "deductions") {
+                         std::cout << "desc count and is desc: " << directDescendants.count(currentTable) <<  " -- " << (directDescendants[currentTable] ? "true" : "false") << " -- " << currentTable << '\n';
+                }
                 deps[dependentTable].insert(currentTable);
                 inv[currentTable].insert(dependentTable);
                 tableOrder.push_back(dependentTable);
@@ -341,19 +353,22 @@ int main(int argc, char** argv)
 
 
         
-        std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::string>>> tableColValues;
 
         conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
                 auto id = to<std::string>(r["id"]);
+                tableColValues[std::string(argv[1])]["id"].push_back(id);
+                /*
                 for(auto& col : tableFkeyNeeds[argv[1]]) {
-                    auto ye = to<std::string>(r[col]);
-                    tableColValues[argv[1]][col].push_back(ye);
+                    auto val = to<std::string>(r[col]);
+                    tableColValues[std::string(argv[1])][col].push_back(val);
                 }
+                */
             },
             ("select * from " + std::string(argv[1]) + " where id = " + std::string(argv[2])));
 
+        std::cout << "supplier stuff: " << tableColValues[std::string(argv[1])]["id"][0] << '\n';
         // maybe need to rethink this
         auto whereCondition = [&](std::string tableName) {
             std::string whereCondition = "";
@@ -460,6 +475,7 @@ int main(int argc, char** argv)
                 std::cout << entry.first << '\n';
             }
         }
+
         std::cout << "<--------------->\nNOT Direct Descendants:\n";
         for(auto& table : others) {
             std::cout << table << '\n';
@@ -473,16 +489,69 @@ int main(int argc, char** argv)
                 descendantSet.push_back(l);
             }
         }
+
         for(auto& l : othersL) {
             std::cout << l << '\n';
         }
 
         assert(descendantSet.size() > 0 && descendantSet[0] == std::string(argv[1]));
         
+        auto dataSearchDescendantWhere = [&](const std::string& tableName){
+            std::string where = "WHERE 1 = 1";
+            bool flag = false;
+            for(auto& dependencyTable : deps[tableName]) {
+                if(directDescendants.count(dependencyTable) == 0 || !directDescendants[dependencyTable]) continue;
+                std::string foreignKey = tableDependencyFKeys[tableName][dependencyTable];
+                std::vector<std::string> values = tableColValues[dependencyTable][fkeyCols[dependencyTable][fkeys[tableName][dependencyTable]]];
+                if(values.size()) {
+                    flag = true;
+                    where += (" AND " + foreignKey + " IN " + "(" + valuesFromVector(values) + ")");
+                }
+            }
+            if(!flag) where += " AND 1 = 2";
+            return where;
+        };
 
         auto dataSearchTable = [&](const std::string& tableName){
+            
+            std::string query = "SELECT * FROM " + tableName + " " + dataSearchDescendantWhere(tableName);
+            return query;
+        };  
+        fs::path dataDirectory = "data";
+        fs::create_directory(dataDirectory);
+        fs::current_path(dataDirectory);
 
-        };
+        for(auto& descendantTableName : descendantSet) {
+            fs::path tableDir = descendantTableName;
+            fs::create_directory(tableDir);
+        }
+
+        for(auto& descendantTableName : descendantSet) {
+            fs::path tableDir = descendantTableName;
+            fs::current_path(tableDir);
+            fs::path dataSearchPath = "data_search";
+            fs::create_directory(dataSearchPath);
+            fs::current_path(dataSearchPath);
+            std::string query = dataSearchTable(descendantTableName);
+            std::cout << "-------------------------\n" <<  query << '\n';
+            std::ofstream fout(descendantTableName + ".csv");
+            conn.execute([&](auto&& r)
+            {
+                using dmitigr::pgfe::to;
+                bool firstCol = true;
+                for(auto& col : r) {
+                    if(!firstCol){
+                        fout << ',';
+                    } else {
+                        firstCol = false;
+                    }
+                    fout << to<std::string>(r[col.first]);
+                }
+                fout << std::endl;
+            },
+            (query));
+            fs::current_path(fs::current_path().parent_path().parent_path());
+        }
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
@@ -491,6 +560,7 @@ int main(int argc, char** argv)
         std::string foo = "foo";
         auto stringMaxSize = foo.max_size();
         std::cout << "Max string size: " << stringMaxSize << '\n';
+        std::cout << fs::current_path() << '\n';
 
     } catch (const pgfe::Server_exception& e) {
         std::cout << e.error().detail() << '\n';
