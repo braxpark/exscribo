@@ -1,7 +1,7 @@
 [
   {
     "arguments": [
-      "/usr/bin/g++",
+      "/usr/bin/clang++-18",
       "-c",
       "-std=c++20",
       "-I/opt/homebrew/include/postgresql@14/include",
