@@ -18,9 +18,11 @@ namespace pgfe = dmitigr::pgfe;
 
 struct DatabaseInfo {
     std::string host;
+    int port;
     std::string dbName;
     std::string username;
     std::string password;
+    bool sslEnabled;
 };
 
 enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
@@ -32,9 +34,11 @@ void parseFileIntoConfig(const std::string fileName, DatabaseInfo& config) {
     std::string content( (std::istreambuf_iterator<char>(ifs) ), (std::istreambuf_iterator<char>()));
     std::stringstream ssContent(content);
     struct_mapping::reg(&DatabaseInfo::host, "host");
+    struct_mapping::reg(&DatabaseInfo::port, "port");
     struct_mapping::reg(&DatabaseInfo::dbName, "dbName");
     struct_mapping::reg(&DatabaseInfo::username, "username");
     struct_mapping::reg(&DatabaseInfo::password, "password");
+    struct_mapping::reg(&DatabaseInfo::sslEnabled, "sslEnabled");
     struct_mapping::map_json_to_struct(config, ssContent);
 }
 
@@ -142,7 +146,7 @@ int main(int argc, char** argv)
 {
     DatabaseInfo config;
     parseFileIntoConfig("dataSource.json", config);
-    std::cout << config.host << " - " << config.dbName << " - " << config.username << " - " << config.password << '\n';
+    std::cout << config.host << " - " << config.port << config.dbName << " - " << config.username << " - " << config.password << " - "  << config.sslEnabled << '\n';
     std::cout << "Params: \n";
     for(int i = 0; i < argc; i++) {
         std::cout << argv[i] <<  '\n';
@@ -152,15 +156,16 @@ int main(int argc, char** argv)
     std::string retailerQuery = getForeignKeyQuery(argv[1]);
     try {
         pgfe::Connection conn{pgfe::Connection_options{}
-            .set(pgfe::Communication_mode::net)
-            .set_hostname(config.host)
-            .set_database(config.dbName)
-            .set_username(config.username)
-            .set_password(config.password)
-            .set_ssl_enabled(true)
-        };
-        conn.connect();
+        .set(pgfe::Communication_mode::net)
+        .set_hostname(config.host)
+        .set_port(config.port)
+        .set_database(config.dbName)
+        .set_username(config.username)
+        .set_password(config.password)
+        .set_ssl_enabled(config.sslEnabled)};
 
+        conn.connect();
+        /*
         pgfe::Connection local{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
             .set_hostname("localhost")
@@ -169,8 +174,8 @@ int main(int argc, char** argv)
             .set_password("postgres")
             //.set_ssl_enabled(true)
         };
-
         local.connect();
+        */
         
         std::unordered_set<std::string> seen;
         std::unordered_map<std::string, bool> directDescendants;
@@ -192,6 +197,7 @@ int main(int argc, char** argv)
         directDescendants[std::string(argv[1])] = true;
         while(!q.empty()) {
             std::string currentTable = q.front();
+            std::cout <<  "current table: " << currentTable << '\n';
             q.pop();
             std::string dependants = getForeignKeyQuery(currentTable);
             std::string supporters = getSupporterQuery(currentTable);
@@ -233,7 +239,7 @@ int main(int argc, char** argv)
             conn.execute([&](auto&& r){
                 using dmitigr::pgfe::to;
                 auto tableName = to<std::string>(r["foreign_table_name"]);
-                //std::cout << currentTable << " depends on: " << tableName << '\n';
+                std::cout << currentTable << " depends on: " << tableName << '\n';
                 if(seen.count(tableName) == 0) {
                     seen.insert(tableName);
                     q.push(tableName);
@@ -310,7 +316,6 @@ int main(int argc, char** argv)
                 depsCopyS[erase].erase(currentTable);
             }
         }
-
         // kahns on the non direct descendants  -> inverted on the dep/supporter relationship
         std::vector<std::string> othersL;
         std::queue<std::string> O;
@@ -533,48 +538,15 @@ int main(int argc, char** argv)
             fs::current_path(tableDir);
             fs::path dataSearchPath = "data_search";
             fs::create_directory(dataSearchPath);
-            fs::create_directory(fs::path("raw"));
             fs::current_path(dataSearchPath);
             std::string query = dataSearchTable(descendantTableName);
             std::cout << "-------------------------\n" <<  query << '\n';
             std::ofstream fout(descendantTableName + ".csv");
-            bool firstRow = true;
             conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
                 bool firstCol = true;
-                if(firstRow) {
-                    bool innerFirstCol = true;
-                    for(auto& col : r) {
-                        bool needThisCol = false;
-                        for(auto& fKey : tableFkeyNeeds[descendantTableName]) {
-                             if(fKey == col.first) {
-                                 needThisCol = true;
-                                 break;
-                             }
-                        }
-                        if(!needThisCol) continue;
-                        if(!innerFirstCol) {
-                            fout << ',';
-                        } else {
-                            innerFirstCol = false;
-                        }
-                        fout << col.first;
-                    }
-                    firstRow = false;
-                    fout << std::endl;
-                }
                 for(auto& col : r) {
-                    fs::current_path(fs::current_path().parent_path());
-                    fs::current_path(fs::path("raw"));
-                    bool needThisCol = false;
-                    for(auto& fKey : tableFkeyNeeds[descendantTableName]) {
-                         if(fKey == col.first) {
-                             needThisCol = true;
-                             break;
-                         }
-                    }
-                    if(!needThisCol) continue;
                     if(!firstCol){
                         fout << ',';
                     } else {
