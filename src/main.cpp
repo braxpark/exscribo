@@ -181,6 +181,7 @@ int main(int argc, char** argv)
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> invFkeys;
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> fkeyCols;  // fkeyCols[table_foo][column_name] = foreign_column_name
         std::unordered_map<std::string, std::unordered_set<std::string>> tableFkeyNeeds;
+        std::unordered_map<std::string, std::unordered_set<std::string>> invTableFkeyNeeds;
         std::unordered_map<std::string, std::unordered_map<std::string, ColInfo>> tableCols;
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> tableDependencyFKeys;
         std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::string>>> tableColValues;
@@ -203,6 +204,7 @@ int main(int argc, char** argv)
                 auto foreignColName = to<std::string>(r["foreign_column_name"]);
                 fkeyCols[currentTable][colName] = foreignColName;
                 tableFkeyNeeds[currentTable].insert(foreignColName);
+                invTableFkeyNeeds[dependentTable].insert(colName);
                 fkeys[dependentTable][currentTable] = colName; // supporter's col name
                 invFkeys[currentTable][dependentTable] = colName;
     
@@ -531,18 +533,52 @@ int main(int argc, char** argv)
             fs::current_path(tableDir);
             fs::path dataSearchPath = "data_search";
             fs::create_directory(dataSearchPath);
+            fs::create_directory(fs::path("raw"));
             fs::current_path(dataSearchPath);
             std::string query = dataSearchTable(descendantTableName);
             std::cout << "-------------------------\n" <<  query << '\n';
             std::ofstream fout(descendantTableName + ".csv");
+            bool firstRow = true;
             conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
                 bool firstCol = true;
+                if(firstRow) {
+                    bool innerFirstCol = true;
+                    for(auto& col : r) {
+                        bool needThisCol = false;
+                        for(auto& fKey : tableFkeyNeeds[descendantTableName]) {
+                             if(fKey == col.first) {
+                                 needThisCol = true;
+                                 break;
+                             }
+                        }
+                        if(!needThisCol) continue;
+                        if(!innerFirstCol) {
+                            fout << ',';
+                        } else {
+                            innerFirstCol = false;
+                        }
+                        fout << col.first;
+                    }
+                    firstRow = false;
+                    fout << std::endl;
+                }
                 for(auto& col : r) {
+                    fs::current_path(fs::current_path().parent_path());
+                    fs::current_path(fs::path("raw"));
+                    bool needThisCol = false;
+                    for(auto& fKey : tableFkeyNeeds[descendantTableName]) {
+                         if(fKey == col.first) {
+                             needThisCol = true;
+                             break;
+                         }
+                    }
+                    if(!needThisCol) continue;
                     if(!firstCol){
                         fout << ',';
                     } else {
+
                         firstCol = false;
                     }
                     fout << to<std::string>(r[col.first]);
