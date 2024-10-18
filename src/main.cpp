@@ -199,7 +199,6 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
     }
 }
 
-
 int main(int argc, char** argv)
 {
     DatabaseInfo config;
@@ -638,7 +637,9 @@ int main(int argc, char** argv)
                     col.index = colIndexes[fkey];
                     cols.push_back(col);
                 }
-                parseRawRowData(rawInfile, parsed, cols);
+                if(cols.size()) { // only create _parsed file if there are columns needed
+                    parseRawRowData(rawInfile, parsed, cols);
+                }
             }
             fs::current_path(fs::current_path().parent_path().parent_path());  // /data
         }
