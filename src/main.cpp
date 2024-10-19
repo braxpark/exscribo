@@ -3,6 +3,7 @@
 #include "include/src/pgfe/pgfe.hpp"
 #include <cassert>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -16,7 +17,6 @@
 namespace fs = std::filesystem;
 
 namespace pgfe = dmitigr::pgfe;
-
 
 enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
 
@@ -40,7 +40,7 @@ struct RawColumn {
     int index;
 };
 
-const char DELIMITER = '|';
+const char DELIMITER = 29;
 
 void parseFileIntoConfig(const std::string fileName, DatabaseInfo& config) {
     // Assume file exists and is accessible
@@ -323,16 +323,6 @@ int main(int argc, char** argv)
             return inv.count(table) > 0;
         };
         
-        /*
-        for(auto& d : deps) {
-            std::cout << d.first << " depends on: ";
-            for(auto& di: d.second) {
-                std::cout << di << " | ";
-            }
-            std::cout << '\n';
-        }
-        */
-
         // kahn's algorithm
         std::vector<std::string> L;
         std::queue<std::string> S;
@@ -415,14 +405,11 @@ int main(int argc, char** argv)
             }
         }
 
-
-        
-
         conn.execute([&](auto&& r)
             {
                 using dmitigr::pgfe::to;
                 auto id = to<std::string>(r["id"]);
-                tableColValues[std::string(argv[1])]["id"].push_back(id);
+                tableColValues[std::string(argv[1])]["id"].push_back(id); // values = tableColValues[table_A][col_in_table_A];
                 /*
                 for(auto& col : tableFkeyNeeds[argv[1]]) {
                     auto val = to<std::string>(r[col]);
@@ -559,6 +546,40 @@ int main(int argc, char** argv)
         }
 
         assert(descendantSet.size() > 0 && descendantSet[0] == std::string(argv[1]));
+
+        auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable){
+            // in /data_search
+            std::string fkeyCol = fkeyCols[dependantTable][fkeys[tableName][dependantTable]];
+            int fkeyColIndex = INT_MIN;
+            // need fkey from dependant table
+            // eventually could probably use better file handling but for now this is probably fine...
+            std::ifstream infile("../../" + dependantTable + "/data_search/" + dependantTable + "_parsed.csv");
+            assert(infile.is_open());
+            std::string line;
+            size_t lineNumber = 0;
+            std::vector<std::string> values;
+            while(std::getline(infile, line)) {
+                std::vector<std::string> lineValues;
+                std::stringstream lineStream(line);
+                std::string cell;
+                while(std::getline(lineStream, cell, DELIMITER)) {
+                    lineValues.push_back(cell);
+                }
+                if(lineNumber == 0) {
+                    for(size_t idx = 0; idx < lineValues.size(); idx++) {
+                        if(lineValues[idx] == fkeyCol) {
+                            fkeyColIndex = idx; break;
+                        }
+                    }
+                    assert(fkeyColIndex != INT_MIN);
+                } else {
+                    values.push_back(lineValues[fkeyColIndex]);
+                }
+                lineNumber++;
+            }
+            infile.close();
+            return values;
+        };
         
         auto dataSearchDescendantWhere = [&](const std::string& tableName){
             std::string where = "WHERE 1 = 1";
@@ -566,16 +587,16 @@ int main(int argc, char** argv)
             for(auto& dependantTable : deps[tableName]) {
                 if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
                 std::string foreignKey = tableDependencyFKeys[tableName][dependantTable];
-                std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
+                //std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
+                std::vector<std::string> values = getValuesForTable(tableName, dependantTable);
                 if(values.size()) {
                     flag = true;
-                    where += (" AND " + foreignKey + " IN " + "(" + valuesFromVector(values) + ")");
+                    std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
+                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(values) + ")");
                 }
             }
-            //if(!flag) where += " AND 1 = 2";
             return where;
         };
-
 
         auto dataSearchTable = [&](const std::string& tableName){
             std::string query = "SELECT * FROM " + tableName + " " + dataSearchDescendantWhere(tableName);
@@ -598,6 +619,7 @@ int main(int argc, char** argv)
             fs::current_path(dataSearchPath);
             std::string query = dataSearchTable(descendantTableName);
             std::cout << "-------------------------\n" <<  query << '\n';
+            std::cout << descendantTableName << '\n';
             std::ofstream fout(descendantTableName + ".csv");
             std::ofstream parsed(descendantTableName + "_parsed.csv");
             bool firstRow = true;
@@ -643,6 +665,7 @@ int main(int argc, char** argv)
             }
             fs::current_path(fs::current_path().parent_path().parent_path());  // /data
         }
+
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
         std::cout << "Program ran in: " << elapsedTime.count() << '\n';
