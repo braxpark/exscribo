@@ -273,7 +273,7 @@ int main(int argc, char** argv)
                 auto dependentTable = to<std::string>(r["tableName"]);
                 auto colName = to<std::string>(r["column_name"]);
                 auto foreignColName = to<std::string>(r["foreign_column_name"]);
-                fkeyCols[currentTable][colName] = foreignColName;
+                fkeyCols[currentTable][colName] = foreignColName; // colName == dependent table col, foreignColName is current Table colName
                 tableFkeyNeeds[currentTable].insert(foreignColName); // table A == supporting table, foreignColName is column within A needed to foreign key onto dependant tables of A
                 invTableFkeyNeeds[dependentTable].insert(colName);
                 fkeys[dependentTable][currentTable] = colName; // supporter's col name
@@ -308,6 +308,7 @@ int main(int argc, char** argv)
             conn.execute([&](auto&& r){
                 using dmitigr::pgfe::to;
                 auto foreignTableName = to<std::string>(r["foreign_table_name"]);
+                auto foreignKeyCol = to<std::string>(r["foreign_column_name"]);
                 auto tableName = to<std::string>(r["tableName"]);
                 auto colName = to<std::string>(r["column_name"]);
                 std::cout << currentTable << " depends on: " << foreignTableName << '\n';
@@ -317,8 +318,16 @@ int main(int argc, char** argv)
                 }
                 deps[currentTable].insert(foreignTableName);
                 inv[foreignTableName].insert(currentTable);
+                std::cout << foreignTableName << " as a supporter depends on: " << currentTable << '\n';
                 outsideTableFkeyNeeds[tableName].insert(colName);
                 tableFkeyNeeds[tableName].insert(colName); // table A == supporting table, foreignColName is column within A needed to foreign key onto dependant tables of A
+                fkeyCols[currentTable][colName] = foreignKeyCol;
+                tableDependencyFKeys[tableName][foreignTableName] = colName;
+                fkeys[tableName][foreignTableName] = colName; // supporter's col name
+                invFkeys[tableName][foreignTableName] = foreignKeyCol;
+                if(tableName == "wal_mart_regular_purchase_orders") {
+                    std::cout << tableName << " - " << foreignTableName <<  " - " << colName << '\n';
+                }
             }, supporters);
             std::string colQuery = getTableFieldsAndDataTypes(currentTable);
             conn.execute([&](auto&& r) {
@@ -562,23 +571,26 @@ int main(int argc, char** argv)
 
         assert(descendantSet.size() > 0 && descendantSet[0] == std::string(argv[1]));
 
-        auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable){
+        auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable, std::string option = "desc"){
             // in /data_search
-            std::string fkeyCol = fkeyCols[dependantTable][fkeys[tableName][dependantTable]];
-            int fkeyColIndex = INT_MIN;
+            std::string fkeysVal = option == "desc" ? fkeys[tableName][dependantTable] : fkeys[dependantTable][tableName];
+            std::string fkeyCol = option == "desc" ? fkeyCols[dependantTable][fkeys[tableName][dependantTable]] : fkeysVal;
+            std::cout << "GET VALUES: " << fkeysVal << '\n';
+            std::cout << "fkeyCols: " << fkeyCols[tableName][fkeysVal] << '\n';
             // need fkey from dependant table
             // eventually could probably use better file handling but for now this is probably fine...
             std::ifstream infile("../../" + dependantTable + "/data_search/" + dependantTable + "_parsed.csv");
             assert(infile.is_open());
             std::string line;
             size_t lineNumber = 0;
+            int fkeyColIndex = INT_MIN;
             std::vector<std::string> values;
             while(std::getline(infile, line)) {
                 std::vector<std::string> lineValues;
                 std::stringstream lineStream(line);
                 std::string cell;
                 while(std::getline(lineStream, cell, DELIMITER)) {
-                    lineValues.push_back(cell);
+                        lineValues.push_back(cell);
                 }
                 if(lineNumber == 0) {
                     for(size_t idx = 0; idx < lineValues.size(); idx++) {
@@ -586,6 +598,8 @@ int main(int argc, char** argv)
                             fkeyColIndex = idx; break;
                         }
                     }
+                    std::cout << "table and dep table: " << tableName << " | " << dependantTable << '\n';
+                    std::cout << "fkeyCol: " << fkeyCol << '\n';
                     assert(fkeyColIndex != INT_MIN);
                 } else {
                     values.push_back(lineValues[fkeyColIndex]);
@@ -617,153 +631,111 @@ int main(int argc, char** argv)
             std::string where = "WHERE 1 = 1";
             bool flag = false;
             for(auto& dependantTable : inv[tableName]) {
-                if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
-                std::string foreignKey = tableDependencyFKeys[tableName][dependantTable];
+                //if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
+                std::string foreignKey = invFkeys[dependantTable][tableName];
                 //std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
-                std::vector<std::string> values = getValuesForTable(tableName, dependantTable);
+                std::vector<std::string> values = getValuesForTable(tableName, dependantTable, "nondesc");
+                std::vector<std::string> noNulls;
+                for(auto& val : values) {
+                    if(val.size() > 0) {
+                        noNulls.push_back(val);
+                    }
+                }
                 if(values.size()) {
                     flag = true;
                     std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
-                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(values) + ")");
+                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(noNulls) + ")");
+                } else {
+                    std::cout << "No associative values for: " << tableName << '\n';
                 }
             }
             return where;
         };
 
-        auto dataSearchTable = [&](const std::string& tableName){
-            std::string query = "SELECT * FROM " + tableName + " " + dataSearchDescendantWhere(tableName);
+        auto dataSearchTable = [&](const std::string& tableName, std::string option = "desc"){
+            std::string query = "SELECT * FROM " + tableName + " " + (option == "desc" ? dataSearchDescendantWhere(tableName) : dataSearchNonDescendantWhere(tableName));
             return query;
         };  
         fs::path dataDirectory = "data";
         fs::create_directory(dataDirectory);
         fs::current_path(dataDirectory);
-
+        /*
         for(auto& descendantTableName : descendantSet) {
             fs::path tableDir = descendantTableName;
             fs::create_directory(tableDir);
         }
 
         for(auto& outsideTableName : othersL) {
-            fs::path tableDir = outsideTableName;
+            fs::path tableDir = outsideTableName;l
             fs::create_directory(tableDir);
         }
+        */
 
-
-
-        for(auto& descendantTableName : descendantSet) {
-            fs::path tableDir = descendantTableName;
-            fs::current_path(tableDir);
-            fs::path dataSearchPath = "data_search";
-            fs::create_directory(dataSearchPath);
-            fs::current_path(dataSearchPath);
-            std::string query = dataSearchTable(descendantTableName);
-            std::cout << "-------------------------\n" <<  query << '\n';
-            std::cout << descendantTableName << '\n';
-            std::ofstream fout(descendantTableName + ".csv");
-            std::ofstream parsed(descendantTableName + "_parsed.csv");
-            bool firstRow = true;
-            std::unordered_map<std::string, int8_t> colIndexes;
-            std::unordered_set<std::string> neededFkeyColumns = tableFkeyNeeds[descendantTableName];
-            for(auto& f : neededFkeyColumns) std::cout << f << '\n';
-            size_t numberOfRows = 0;
-            conn.execute([&](auto&& r)
-            {
-                numberOfRows++;
-                if(firstRow) {
-                    firstRow = false;
-                    colIndexes = columnIndexesFromRow(neededFkeyColumns, r);
-                }
-
-                using dmitigr::pgfe::to;
-                bool firstCol = true;
-                for(auto& col : r) {
-                    if(!firstCol){
-                        fout << DELIMITER;
-                    } else {
-                        firstCol = false;
+        auto doTableDataSearch = [&](std::vector<std::string> tableList, std::unordered_map<std::string, std::unordered_set<std::string>> neededFKeys, std::string option = "desc") {
+            for(auto& tableName : tableList) {
+                fs::create_directory(fs::path(tableName));
+                fs::path tableDir = tableName;
+                fs::current_path(tableDir);
+                fs::path dataSearchPath = "data_search";
+                fs::create_directory(dataSearchPath);
+                fs::current_path(dataSearchPath);
+                std::string query = dataSearchTable(tableName, option);
+                std::cout << "-------------------------\n" <<  query << '\n';
+                std::cout << tableName << '\n';
+                std::ofstream fout(tableName + ".csv");
+                std::ofstream parsed(tableName + "_parsed.csv");
+                bool firstRow = true;
+                std::unordered_map<std::string, int8_t> colIndexes;
+                std::unordered_set<std::string> neededFkeyColumns = neededFKeys[tableName];
+                for(auto& f : neededFkeyColumns) std::cout << f << '\n';
+                size_t numberOfRows = 0;
+                conn.execute([&](auto&& r)
+                {
+                    numberOfRows++;
+                    if(firstRow) {
+                        firstRow = false;
+                        colIndexes = columnIndexesFromRow(neededFkeyColumns, r);
                     }
-                    std::string colValue =to<std::string>(r[col.first]);
-                    colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
-                    fout << colValue;
-                }
-                fout << std::endl;
-            },
-            (query));
-            fout.close();
-            if(numberOfRows) {
-                std::ifstream rawInfile(descendantTableName + ".csv");
-                std::vector<RawColumn> cols;
-                for(auto& fkey : neededFkeyColumns) {
-                    RawColumn col;
-                    col.name = fkey;
-                    assert(colIndexes.count(fkey) > 0);
-                    col.index = colIndexes[fkey];
-                    cols.push_back(col);
-                }
-                if(cols.size()) { // only create _parsed file if there are columns needed
-                    parseRawRowData(rawInfile, parsed, cols);
-                }
-            }
-            fs::current_path(fs::current_path().parent_path().parent_path());  // /data
-        }
 
-
-        for(auto& nonDescendantTableName : othersL) {
-            fs::path tableDir = nonDescendantTableName;
-            fs::current_path(tableDir);
-            fs::path dataSearchPath = "data_search";
-            fs::create_directory(dataSearchPath);
-            fs::current_path(dataSearchPath);
-            std::string query = dataSearchTable(nonDescendantTableName);
-            std::cout << "-------------------------\n" <<  query << '\n';
-            std::cout << nonDescendantTableName << '\n';
-            std::ofstream fout(nonDescendantTableName + ".csv");
-            std::ofstream parsed(nonDescendantTableName + "_parsed.csv");
-            bool firstRow = true;
-            std::unordered_map<std::string, int8_t> colIndexes;
-            std::unordered_set<std::string> neededFkeyColumns = outsideTableFkeyNeeds[nonDescendantTableName];
-            for(auto& f : neededFkeyColumns) std::cout << f << '\n';
-            size_t numberOfRows = 0;
-            conn.execute([&](auto&& r)
-            {
-                numberOfRows++;
-                if(firstRow) {
-                    firstRow = false;
-                    colIndexes = columnIndexesFromRow(neededFkeyColumns, r);
-                }
-
-                using dmitigr::pgfe::to;
-                bool firstCol = true;
-                for(auto& col : r) {
-                    if(!firstCol){
-                        fout << DELIMITER;
-                    } else {
-                        firstCol = false;
+                    using dmitigr::pgfe::to;
+                    bool firstCol = true;
+                    for(auto& col : r) {
+                        if(!firstCol){
+                            fout << DELIMITER;
+                        } else {
+                            firstCol = false;
+                        }
+                        std::string colValue =to<std::string>(r[col.first]);
+                        colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
+                        fout << colValue;
                     }
-                    std::string colValue =to<std::string>(r[col.first]);
-                    colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
-                    fout << colValue;
+                    fout << std::endl;
+                },
+                (query));
+                fout.close();
+                if(numberOfRows) {
+                    std::ifstream rawInfile(tableName + ".csv");
+                    std::vector<RawColumn> cols;
+                    for(auto& fkey : neededFkeyColumns) {
+                        RawColumn col;
+                        col.name = fkey;
+                        assert(colIndexes.count(fkey) > 0);
+                        col.index = colIndexes[fkey];
+                        cols.push_back(col);
+                    }
+                    if(cols.size()) { // only create _parsed file if there are columns needed
+                        parseRawRowData(rawInfile, parsed, cols);
+                    }
                 }
-                fout << std::endl;
-            },
-            (query));
-            fout.close();
-            if(numberOfRows) {
-                std::ifstream rawInfile(nonDescendantTableName + ".csv");
-                std::vector<RawColumn> cols;
-                for(auto& fkey : neededFkeyColumns) {
-                    RawColumn col;
-                    col.name = fkey;
-                    assert(colIndexes.count(fkey) > 0);
-                    col.index = colIndexes[fkey];
-                    cols.push_back(col);
-                }
-                if(cols.size()) { // only create _parsed file if there are columns needed
-                    parseRawRowData(rawInfile, parsed, cols);
-                }
+                fs::current_path(fs::current_path().parent_path().parent_path());  // /data
             }
-            fs::current_path(fs::current_path().parent_path().parent_path());  // /data
-        }
+        };
+
+        doTableDataSearch(descendantSet, tableFkeyNeeds);
+        doTableDataSearch(othersL, outsideTableFkeyNeeds, "nonDesc");
+
+
+
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
