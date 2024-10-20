@@ -177,6 +177,12 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
         std::string parsedRow = "";
         for(size_t i = 0; i < cols.size(); i++) {
             auto col = cols[i];
+            if(col.index >= values.size()) {
+                std::cout << "Col index and values size: \n";
+                for(auto& val : values) std::cout << val << " | ";
+                std::cout << '\n';
+                std::cout << col.index << " | " << values.size() << '\n';
+            }
             assert(col.index < values.size());
             if(i > 0) {
                 parsedRow += DELIMITER;
@@ -226,7 +232,7 @@ int main(int argc, char** argv)
         pgfe::Connection local{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
             .set_hostname("localhost")
-            .set_database("deductions_app_development")
+            .set_database("postgres")
             .set_username("postgres")
             .set_password("postgres")
             //.set_ssl_enabled(true)
@@ -236,6 +242,7 @@ int main(int argc, char** argv)
         
         std::unordered_set<std::string> seen;
         std::unordered_map<std::string, bool> directDescendants;
+        std::unordered_map<std::string, bool> outsideTables;
         std::map<std::string, std::unordered_set<std::string>> deps;
         std::map<std::string, std::unordered_set<std::string>> inv;
         std::unordered_map<std::string, std::unordered_set<std::string>> locks;
@@ -243,6 +250,7 @@ int main(int argc, char** argv)
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> invFkeys;
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> fkeyCols;  // fkeyCols[table_foo][column_name] = foreign_column_name
         std::unordered_map<std::string, std::unordered_set<std::string>> tableFkeyNeeds;
+        std::unordered_map<std::string, std::unordered_set<std::string>> outsideTableFkeyNeeds;
         std::unordered_map<std::string, std::unordered_set<std::string>> invTableFkeyNeeds;
         std::unordered_map<std::string, std::unordered_map<std::string, ColInfo>> tableCols;
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> tableDependencyFKeys;
@@ -284,7 +292,11 @@ int main(int argc, char** argv)
                 // inv[A] = A supports [..B]
                 
                 bool isDescendant = directDescendants[currentTable];
-                directDescendants[dependentTable] = (directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) || directDescendants[dependentTable];
+                if((directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) || directDescendants[dependentTable]) {
+                    directDescendants[dependentTable] = true;
+                } else {
+                    outsideTables[dependentTable] = true;
+                }
                 if(dependentTable == "deductions") {
                          std::cout << "desc count and is desc: " << directDescendants.count(currentTable) <<  " -- " << (directDescendants[currentTable] ? "true" : "false") << " -- " << currentTable << '\n';
                 }
@@ -295,15 +307,18 @@ int main(int argc, char** argv)
             dependants);
             conn.execute([&](auto&& r){
                 using dmitigr::pgfe::to;
-                auto tableName = to<std::string>(r["foreign_table_name"]);
-                std::cout << currentTable << " depends on: " << tableName << '\n';
-                if(seen.count(tableName) == 0) {
-                    seen.insert(tableName);
-                    q.push(tableName);
+                auto foreignTableName = to<std::string>(r["foreign_table_name"]);
+                auto tableName = to<std::string>(r["tableName"]);
+                auto colName = to<std::string>(r["column_name"]);
+                std::cout << currentTable << " depends on: " << foreignTableName << '\n';
+                if(seen.count(foreignTableName) == 0) {
+                    seen.insert(foreignTableName);
+                    q.push(foreignTableName);
                 }
-                deps[currentTable].insert(tableName);
-                inv[tableName].insert(currentTable);
-                
+                deps[currentTable].insert(foreignTableName);
+                inv[foreignTableName].insert(currentTable);
+                outsideTableFkeyNeeds[tableName].insert(colName);
+                tableFkeyNeeds[tableName].insert(colName); // table A == supporting table, foreignColName is column within A needed to foreign key onto dependant tables of A
             }, supporters);
             std::string colQuery = getTableFieldsAndDataTypes(currentTable);
             conn.execute([&](auto&& r) {
@@ -598,6 +613,23 @@ int main(int argc, char** argv)
             return where;
         };
 
+        auto dataSearchNonDescendantWhere = [&](const std::string& tableName){
+            std::string where = "WHERE 1 = 1";
+            bool flag = false;
+            for(auto& dependantTable : inv[tableName]) {
+                if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
+                std::string foreignKey = tableDependencyFKeys[tableName][dependantTable];
+                //std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
+                std::vector<std::string> values = getValuesForTable(tableName, dependantTable);
+                if(values.size()) {
+                    flag = true;
+                    std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
+                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(values) + ")");
+                }
+            }
+            return where;
+        };
+
         auto dataSearchTable = [&](const std::string& tableName){
             std::string query = "SELECT * FROM " + tableName + " " + dataSearchDescendantWhere(tableName);
             return query;
@@ -610,6 +642,13 @@ int main(int argc, char** argv)
             fs::path tableDir = descendantTableName;
             fs::create_directory(tableDir);
         }
+
+        for(auto& outsideTableName : othersL) {
+            fs::path tableDir = outsideTableName;
+            fs::create_directory(tableDir);
+        }
+
+
 
         for(auto& descendantTableName : descendantSet) {
             fs::path tableDir = descendantTableName;
@@ -643,7 +682,9 @@ int main(int argc, char** argv)
                     } else {
                         firstCol = false;
                     }
-                    fout << to<std::string>(r[col.first]);
+                    std::string colValue =to<std::string>(r[col.first]);
+                    colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
+                    fout << colValue;
                 }
                 fout << std::endl;
             },
@@ -651,6 +692,64 @@ int main(int argc, char** argv)
             fout.close();
             if(numberOfRows) {
                 std::ifstream rawInfile(descendantTableName + ".csv");
+                std::vector<RawColumn> cols;
+                for(auto& fkey : neededFkeyColumns) {
+                    RawColumn col;
+                    col.name = fkey;
+                    assert(colIndexes.count(fkey) > 0);
+                    col.index = colIndexes[fkey];
+                    cols.push_back(col);
+                }
+                if(cols.size()) { // only create _parsed file if there are columns needed
+                    parseRawRowData(rawInfile, parsed, cols);
+                }
+            }
+            fs::current_path(fs::current_path().parent_path().parent_path());  // /data
+        }
+
+
+        for(auto& nonDescendantTableName : othersL) {
+            fs::path tableDir = nonDescendantTableName;
+            fs::current_path(tableDir);
+            fs::path dataSearchPath = "data_search";
+            fs::create_directory(dataSearchPath);
+            fs::current_path(dataSearchPath);
+            std::string query = dataSearchTable(nonDescendantTableName);
+            std::cout << "-------------------------\n" <<  query << '\n';
+            std::cout << nonDescendantTableName << '\n';
+            std::ofstream fout(nonDescendantTableName + ".csv");
+            std::ofstream parsed(nonDescendantTableName + "_parsed.csv");
+            bool firstRow = true;
+            std::unordered_map<std::string, int8_t> colIndexes;
+            std::unordered_set<std::string> neededFkeyColumns = outsideTableFkeyNeeds[nonDescendantTableName];
+            for(auto& f : neededFkeyColumns) std::cout << f << '\n';
+            size_t numberOfRows = 0;
+            conn.execute([&](auto&& r)
+            {
+                numberOfRows++;
+                if(firstRow) {
+                    firstRow = false;
+                    colIndexes = columnIndexesFromRow(neededFkeyColumns, r);
+                }
+
+                using dmitigr::pgfe::to;
+                bool firstCol = true;
+                for(auto& col : r) {
+                    if(!firstCol){
+                        fout << DELIMITER;
+                    } else {
+                        firstCol = false;
+                    }
+                    std::string colValue =to<std::string>(r[col.first]);
+                    colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
+                    fout << colValue;
+                }
+                fout << std::endl;
+            },
+            (query));
+            fout.close();
+            if(numberOfRows) {
+                std::ifstream rawInfile(nonDescendantTableName + ".csv");
                 std::vector<RawColumn> cols;
                 for(auto& fkey : neededFkeyColumns) {
                     RawColumn col;
