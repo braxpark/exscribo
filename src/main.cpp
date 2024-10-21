@@ -278,21 +278,15 @@ int main(int argc, char** argv)
                 invTableFkeyNeeds[dependentTable].insert(colName);
                 fkeys[dependentTable][currentTable] = colName; // supporter's col name
                 invFkeys[currentTable][dependentTable] = colName;
-    
-
                 tableDependencyFKeys[dependentTable][currentTable] = colName;
-
-
                 if(seen.count(dependentTable) == 0) {
                     seen.insert(dependentTable);
                     q.push(dependentTable);
                 }
-
                 // deps[B] = B depends on [..A]
                 // inv[A] = A supports [..B]
-                
                 bool isDescendant = directDescendants[currentTable];
-                if((directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) || directDescendants[dependentTable]) {
+                if((directDescendants.count(currentTable) > 0 && directDescendants[currentTable])) {
                     directDescendants[dependentTable] = true;
                 } else {
                     outsideTables[dependentTable] = true;
@@ -311,23 +305,18 @@ int main(int argc, char** argv)
                 auto foreignKeyCol = to<std::string>(r["foreign_column_name"]);
                 auto tableName = to<std::string>(r["tableName"]);
                 auto colName = to<std::string>(r["column_name"]);
-                std::cout << currentTable << " depends on: " << foreignTableName << '\n';
                 if(seen.count(foreignTableName) == 0) {
                     seen.insert(foreignTableName);
                     q.push(foreignTableName);
                 }
                 deps[currentTable].insert(foreignTableName);
                 inv[foreignTableName].insert(currentTable);
-                std::cout << foreignTableName << " as a supporter depends on: " << currentTable << '\n';
                 outsideTableFkeyNeeds[tableName].insert(colName);
                 tableFkeyNeeds[tableName].insert(colName); // table A == supporting table, foreignColName is column within A needed to foreign key onto dependant tables of A
                 fkeyCols[currentTable][colName] = foreignKeyCol;
                 tableDependencyFKeys[tableName][foreignTableName] = colName;
                 fkeys[tableName][foreignTableName] = colName; // supporter's col name
                 invFkeys[tableName][foreignTableName] = foreignKeyCol;
-                if(tableName == "wal_mart_regular_purchase_orders") {
-                    std::cout << tableName << " - " << foreignTableName <<  " - " << colName << '\n';
-                }
             }, supporters);
             std::string colQuery = getTableFieldsAndDataTypes(currentTable);
             conn.execute([&](auto&& r) {
@@ -339,6 +328,7 @@ int main(int argc, char** argv)
                 tableCols[currentTable][colName].dataType = getPGDataType(dataType);
             }, colQuery);
         }
+
         auto depCopy = deps;
         std::vector<std::string> order;
         q.push(argv[1]);
@@ -659,17 +649,6 @@ int main(int argc, char** argv)
         fs::path dataDirectory = "data";
         fs::create_directory(dataDirectory);
         fs::current_path(dataDirectory);
-        /*
-        for(auto& descendantTableName : descendantSet) {
-            fs::path tableDir = descendantTableName;
-            fs::create_directory(tableDir);
-        }
-
-        for(auto& outsideTableName : othersL) {
-            fs::path tableDir = outsideTableName;l
-            fs::create_directory(tableDir);
-        }
-        */
 
         auto doTableDataSearch = [&](std::vector<std::string> tableList, std::unordered_map<std::string, std::unordered_set<std::string>> neededFKeys, std::string option = "desc") {
             for(auto& tableName : tableList) {
@@ -734,7 +713,25 @@ int main(int argc, char** argv)
         doTableDataSearch(descendantSet, tableFkeyNeeds);
         doTableDataSearch(othersL, outsideTableFkeyNeeds, "nonDesc");
 
+        for(auto& table : othersL) {
+            if(deps[table].size()) {
+                std::cout << table << " depends on: ";
+                    for(auto& depTable : deps[table]) {
+                        std::cout << depTable << ' ';
+                }
+                std::cout << '\n';
+            }
 
+            if(inv[table].size()) {
+                std::cout << table << " supports: ";
+                    for(auto& depTable : inv[table]) {
+                        std::cout << depTable << ' ';
+                }
+                std::cout << '\n';
+            }
+        }
+
+        // now create and run copy from queries to load the data search results into destination db
 
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
