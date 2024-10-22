@@ -351,7 +351,6 @@ int main(int argc, char** argv)
 
         for(auto& table : seen) {
             if(deps[table].size() == 0) {
-               // std::cout << "Adding: " << table << '\n';
                 S.push(table);
             }
         }   
@@ -401,7 +400,7 @@ int main(int argc, char** argv)
                 O.push(table);
             }
         }
-        
+
         while(!O.empty()) {
             std::string currentTable = O.front();
             O.pop();
@@ -463,70 +462,6 @@ int main(int argc, char** argv)
         };
 
         int64_t totalRows = 0;
-        auto runTable = [&](const std::string& tableName) {
-            std::string query = R"(
-                SELECT
-                    *
-                FROM 
-            )" + tableName
-            + R"(
-            )" +
-            whereCondition(tableName);
-            std::cout << query << "\n";
-            std::string copyQuery = "COPY(" + query + ") TO '/tmp/" + tableName + ".csv' WITH DELIMITER ',' CSV";
-            std::cout << "copy Query: " << copyQuery << '\n';
-            bool ran = false;
-            bool first = true;
-            std::vector<std::string> colNames;
-            /*
-            conn.execute([&](auto&& r)
-            {   
-                using dmitigr::pgfe::to;
-                std::vector<std::string> values;
-                 std::string insertQuery;
-                if(!ran) {
-                    ran = true;
-                    for(size_t i = 0; i < r.field_count(); i++) {
-                        std::string value = to<std::string>(r[i]);
-                        std::string fieldName(r.field_name(i));
-                        if(pgDataTypeNeedsEnclosedQuotes(tableCols[tableName][fieldName].dataType) && value != "") {
-                            std::string enclose = "'";
-                            if(tableCols[tableName][fieldName].dataType == PGDataType::CHARACTERVARYING) {
-                            bool hasSingleQuote = false;
-                                for(auto& chr : value) {
-                                    if(chr == '\'') {
-                                        hasSingleQuote = true;
-                                        break;
-                                    }
-                                }
-                                if(hasSingleQuote) enclose =" $$ ";
-                            }
-                            value = enclose + value + enclose;
-                        } else if(tableCols[tableName][fieldName].dataType == PGDataType::BOOLEAN) {
-                            value = value == "t" ? "TRUE" : "FALSE";
-                        }
-                        values.push_back(value != "" ? value : "NULL");
-                        if(first) {
-                            colNames.push_back(fieldName);
-                        }
-                    }
-                    //std::cout << '\n';
-                    insertQuery = "INSERT INTO " + tableName + " ( " + valuesFromVector(colNames) + " ) " + "VALUES ( " + valuesFromVector(values) + " ) ON CONFLICT DO NOTHING";
-                    outfile << valuesFromVector(values) << '\n';
-                    std::cout << insertQuery << '\n';
-                    //local.execute([&](auto&& r) {
-                    //}, insertQuery);
-                    first = false;
-                }
-                totalRows++;
-                for(auto& col : tableFkeyNeeds[tableName]) {
-                    auto colVal = to<std::string>(r[col]);
-                    tableColValues[tableName][col].push_back(colVal);
-                }
-            },
-            copyQuery);
-            */
-        };
 
         std::cout << "<-------------------------------------------->\nORDER:\n";
         for(auto& l : L) {
@@ -606,7 +541,6 @@ int main(int argc, char** argv)
             for(auto& dependantTable : deps[tableName]) {
                 if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
                 std::string foreignKey = tableDependencyFKeys[tableName][dependantTable];
-                //std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
                 std::vector<std::string> values = getValuesForTable(tableName, dependantTable);
                 if(values.size()) {
                     flag = true;
@@ -621,9 +555,7 @@ int main(int argc, char** argv)
             std::string where = "WHERE 1 = 1";
             bool flag = false;
             for(auto& dependantTable : inv[tableName]) {
-                //if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
                 std::string foreignKey = invFkeys[dependantTable][tableName];
-                //std::vector<std::string> values = tableColValues[dependantTable][fkeyCols[dependantTable][fkeys[tableName][dependantTable]]];
                 std::vector<std::string> values = getValuesForTable(tableName, dependantTable, "nondesc");
                 std::vector<std::string> noNulls;
                 for(auto& val : values) {
