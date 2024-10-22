@@ -41,5 +41,10 @@ test.*
 
 Makefile*
 
+compile_commands.json
+
+destination.json
+source.json
 dataSource.json
+
 data/
