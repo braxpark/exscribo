@@ -5,6 +5,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -228,17 +229,17 @@ int main(int argc, char** argv)
         .set_ssl_enabled(config.sslEnabled)};
 
         conn.connect();
-        /*
+            
         pgfe::Connection local{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
             .set_hostname("localhost")
+            .set_port(5443)
             .set_database("postgres")
             .set_username("postgres")
             .set_password("postgres")
             //.set_ssl_enabled(true)
         };
-        local.connect();
-        */
+        //local.connect();
         
         std::unordered_set<std::string> seen;
         std::unordered_map<std::string, bool> directDescendants;
@@ -648,7 +649,6 @@ int main(int argc, char** argv)
         othersL = outsideSet;
         doTableDataSearch(othersL, outsideTableFkeyNeeds, "nonDesc");
 
-        
         std::ofstream outfile("graph-info.txt");
         // now create and run copy from queries to load the data search results into destination db
         std::string tab = "     ";
@@ -668,7 +668,6 @@ int main(int argc, char** argv)
             }
             */
         }
-
         for(auto& t : outsideTables) {
             numRows++;
             outfile << t.first << '\n';
@@ -693,7 +692,37 @@ int main(int argc, char** argv)
         outfile << numSeenRows << std::endl;
 
 
+        // write psql \copy from commands
+        
+        auto psqlCopyFromCommand = [&](const std::string& tableName) {
+            std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + ".csv";
+            std::stringstream ss;
+            ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
+            std::string hexDelimiter = ss.str();
+            std::string command = "PGPASSWORD=postgres";
+            command += " psql";
+            command += " --host=localhost";
+            command += " --port=5433";
+            command += " --username=postgres";
+            //command += " --password=postgres";
+            command += " --dbname=postgres";
+            command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' CSV")";
+            return command;
+        };
+
+        outfile << "<------------->\n";
+
+        for(auto& t : L) {
+            std::string command = psqlCopyFromCommand(t);
+            int commandSysResult = system(command.c_str());
+            if(commandSysResult) {
+                std::cout << "Copied " << t << " successfully.\n";
+            }
+            outfile << command  << std::endl;
+        }
+
         outfile.close();
+        
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
