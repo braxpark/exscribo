@@ -262,7 +262,6 @@ int main(int argc, char** argv)
         directDescendants[std::string(argv[1])] = true;
         while(!q.empty()) {
             std::string currentTable = q.front();
-            std::cout <<  "current table: " << currentTable << '\n';
             q.pop();
             std::string dependants = getForeignKeyQuery(currentTable);
             std::string supporters = getSupporterQuery(currentTable);
@@ -280,20 +279,19 @@ int main(int argc, char** argv)
                 invFkeys[currentTable][dependentTable] = colName;
                 tableDependencyFKeys[dependentTable][currentTable] = colName;
                 if(seen.count(dependentTable) == 0) {
-                    seen.insert(dependentTable);
                     q.push(dependentTable);
                 }
+                seen.insert(dependentTable);
                 // deps[B] = B depends on [..A]
                 // inv[A] = A supports [..B]
-                bool isDescendant = directDescendants[currentTable];
-                if((directDescendants.count(currentTable) > 0 && directDescendants[currentTable])) {
+                
+                if(directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) {
                     directDescendants[dependentTable] = true;
-                } else {
+                } else if(directDescendants.count(dependentTable) == 0) {
+                    std::cout << "depTable: " << dependentTable << " -- " << currentTable << '\n';
                     outsideTables[dependentTable] = true;
                 }
-                if(dependentTable == "deductions") {
-                         std::cout << "desc count and is desc: " << directDescendants.count(currentTable) <<  " -- " << (directDescendants[currentTable] ? "true" : "false") << " -- " << currentTable << '\n';
-                }
+
                 deps[dependentTable].insert(currentTable);
                 inv[currentTable].insert(dependentTable);
                 tableOrder.push_back(dependentTable);
@@ -306,9 +304,12 @@ int main(int argc, char** argv)
                 auto tableName = to<std::string>(r["tableName"]);
                 auto colName = to<std::string>(r["column_name"]);
                 if(seen.count(foreignTableName) == 0) {
-                    seen.insert(foreignTableName);
                     q.push(foreignTableName);
                 }
+                if(directDescendants.count(foreignTableName) == 0) {
+                    outsideTables[foreignTableName] = true;
+                }
+                seen.insert(foreignTableName);
                 deps[currentTable].insert(foreignTableName);
                 inv[foreignTableName].insert(currentTable);
                 outsideTableFkeyNeeds[tableName].insert(colName);
@@ -343,18 +344,19 @@ int main(int argc, char** argv)
 
         std::vector<std::string> others; // NOT direct descendants;
         //
-        for(auto& table : seen) {
-            if(directDescendants.count(table) == 0 || !directDescendants[table]) {
-                others.push_back(table);
-            }
+        for(auto& table : outsideTables) {
+            others.push_back(table.first);
         }
+
+        int outsideTablesSize = outsideTables.size(), directDescendantsSize = directDescendants.size();
+        std::cout << outsideTablesSize << " vs. " << directDescendantsSize << '\n';
+        assert(outsideTables.size() + directDescendants.size() == seen.size());
 
         for(auto& table : seen) {
             if(deps[table].size() == 0) {
                 S.push(table);
             }
         }   
-
 
         auto invCopyS = inv;
         auto depsCopyS = deps;
@@ -381,11 +383,11 @@ int main(int argc, char** argv)
         std::queue<std::string> O;
         auto invCopyO = inv;
         auto depsCopyO = deps;
-        for(auto& table : others) {
+        for(auto& [table, isOutside] : outsideTables) {
             bool flag = false;
             for(auto& t : inv[table]) {
                 bool othersContains = false;
-                for(auto o : others) {
+                for(auto& [o, isOutside] : outsideTables) {
                     if(o != table && t == o) {
                         othersContains = true;
                         break;
@@ -493,8 +495,6 @@ int main(int argc, char** argv)
         for(auto& l : othersL) {
             std::cout << l << '\n';
         }
-
-        assert(descendantSet.size() > 0 && descendantSet[0] == std::string(argv[1]));
 
         auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable, std::string option = "desc"){
             // in /data_search
@@ -643,28 +643,57 @@ int main(int argc, char** argv)
         };
 
         doTableDataSearch(descendantSet, tableFkeyNeeds);
+        std::vector<std::string> outsideSet;
+        for(auto& [t, ot] : outsideTables) outsideSet.push_back(t);
+        othersL = outsideSet;
         doTableDataSearch(othersL, outsideTableFkeyNeeds, "nonDesc");
 
-        for(auto& table : othersL) {
-            if(deps[table].size()) {
-                std::cout << table << " depends on: ";
-                    for(auto& depTable : deps[table]) {
-                        std::cout << depTable << ' ';
-                }
-                std::cout << '\n';
+        
+        std::ofstream outfile("graph-info.txt");
+        // now create and run copy from queries to load the data search results into destination db
+        std::string tab = "     ";
+        int numRows=0, numSeenRows = 0;
+        for(auto& t : directDescendants) {
+            numRows++;
+            outfile << t.first <<'\n';
+            /*
+            outfile << t << " depends on: \n";
+            for(auto& dep : deps[t]) {
+                outfile << tab << "- " << dep << '\n';
             }
-
-            if(inv[table].size()) {
-                std::cout << table << " supports: ";
-                    for(auto& depTable : inv[table]) {
-                        std::cout << depTable << ' ';
-                }
-                std::cout << '\n';
+            outfile << "<----------------->\n";
+            outfile << "and supports: \n";
+            for(auto& sup : inv[t]) {
+                outfile << tab << "- " << sup << '\n';
             }
+            */
         }
 
-        // now create and run copy from queries to load the data search results into destination db
+        for(auto& t : outsideTables) {
+            numRows++;
+            outfile << t.first << '\n';
+            /*
+            outfile << t << " depends on: \n";
+            for(auto& dep : deps[t]) {
+                outfile << tab << "- " << dep << '\n';
+            }
+            outfile << "<----------------->\n";
+            outfile << "and supports: \n";
+            for(auto& sup : inv[t]) {
+                outfile << tab << "- " << sup << '\n';
+            }
+            */
+        }
+        outfile << numRows << std::endl;
+        outfile << "<------------------------------>\n";
+        for(auto& s : seen) {
+            numSeenRows++;
+            outfile << s << '\n';
+        }
+        outfile << numSeenRows << std::endl;
 
+
+        outfile.close();
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
