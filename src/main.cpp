@@ -656,32 +656,10 @@ int main(int argc, char** argv)
         for(auto& t : directDescendants) {
             numRows++;
             outfile << t.first <<'\n';
-            /*
-            outfile << t << " depends on: \n";
-            for(auto& dep : deps[t]) {
-                outfile << tab << "- " << dep << '\n';
-            }
-            outfile << "<----------------->\n";
-            outfile << "and supports: \n";
-            for(auto& sup : inv[t]) {
-                outfile << tab << "- " << sup << '\n';
-            }
-            */
         }
         for(auto& t : outsideTables) {
             numRows++;
             outfile << t.first << '\n';
-            /*
-            outfile << t << " depends on: \n";
-            for(auto& dep : deps[t]) {
-                outfile << tab << "- " << dep << '\n';
-            }
-            outfile << "<----------------->\n";
-            outfile << "and supports: \n";
-            for(auto& sup : inv[t]) {
-                outfile << tab << "- " << sup << '\n';
-            }
-            */
         }
         outfile << numRows << std::endl;
         outfile << "<------------------------------>\n";
