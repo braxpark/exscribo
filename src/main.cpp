@@ -164,11 +164,12 @@ bool pgDataTypeNeedsEnclosedQuotes(const PGDataType& dataType) {
 }
 
 
-void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<RawColumn> cols) {
+void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<RawColumn> cols, int64_t& totalRows) {
     if(cols.size() == 0) return;
     std::string str;
     bool firstLine = true;
     while(std::getline(infile, str)) {
+        totalRows++;
         std::vector<std::string> values;
         std::stringstream lineStream(str);
         std::string cell;
@@ -642,7 +643,7 @@ int main(int argc, char** argv)
                         cols.push_back(col);
                     }
                     if(cols.size()) { // only create _parsed file if there are columns needed
-                        parseRawRowData(rawInfile, parsed, cols);
+                        parseRawRowData(rawInfile, parsed, cols, totalRows);
                     }
                 }
                 fs::current_path(fs::current_path().parent_path().parent_path());  // /data
@@ -695,8 +696,7 @@ int main(int argc, char** argv)
         };
 
         outfile << "<------------->\n";
-            
-        /*
+        
         for(auto& t : L) {
             std::string command = psqlCopyFromCommand(t);
             int commandSysResult = system(command.c_str());
@@ -705,7 +705,7 @@ int main(int argc, char** argv)
             }
             outfile << command  << std::endl;
         }
-        */
+
         outfile.close();
         
 
