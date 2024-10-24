@@ -178,13 +178,16 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
         std::string parsedRow = "";
         for(size_t i = 0; i < cols.size(); i++) {
             auto col = cols[i];
+            /*
             if(col.index >= values.size()) {
                 std::cout << "Col index and values size: \n";
                 for(auto& val : values) std::cout << val << " | ";
                 std::cout << '\n';
                 std::cout << col.index << " | " << values.size() << '\n';
             }
+            std::cout <<  col.index << '\n';
             assert(col.index < values.size());
+            */
             if(i > 0) {
                 parsedRow += DELIMITER;
             }
@@ -537,7 +540,10 @@ int main(int argc, char** argv)
         };
         
         auto dataSearchDescendantWhere = [&](const std::string& tableName){
-            std::string where = "WHERE 1 = 1";
+            if(tableName == std::string(argv[1])) {
+                return "WHERE id = " + std::string(argv[2]);
+            }
+            std::string where = "WHERE 1 = 2";
             bool flag = false;
             for(auto& dependantTable : deps[tableName]) {
                 if(directDescendants.count(dependantTable) == 0 || !directDescendants[dependantTable]) continue;
@@ -546,14 +552,14 @@ int main(int argc, char** argv)
                 if(values.size()) {
                     flag = true;
                     std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
-                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(values) + ")");
+                    where += (" OR " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(values) + ")");
                 }
             }
             return where;
         };
 
         auto dataSearchNonDescendantWhere = [&](const std::string& tableName){
-            std::string where = "WHERE 1 = 1";
+            std::string where = "WHERE 1 = 2";
             bool flag = false;
             for(auto& dependantTable : inv[tableName]) {
                 std::string foreignKey = invFkeys[dependantTable][tableName];
@@ -567,7 +573,7 @@ int main(int argc, char** argv)
                 if(noNulls.size()) {
                     flag = true;
                     std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
-                    where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(noNulls) + ")");
+                    where += (" OR " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(noNulls) + ")");
                 } else {
                     std::cout << "No associative values for: " << tableName << '\n';
                 }
@@ -689,7 +695,8 @@ int main(int argc, char** argv)
         };
 
         outfile << "<------------->\n";
-
+            
+        /*
         for(auto& t : L) {
             std::string command = psqlCopyFromCommand(t);
             int commandSysResult = system(command.c_str());
@@ -698,7 +705,7 @@ int main(int argc, char** argv)
             }
             outfile << command  << std::endl;
         }
-
+        */
         outfile.close();
         
 
