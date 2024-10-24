@@ -564,7 +564,7 @@ int main(int argc, char** argv)
                         noNulls.push_back(val);
                     }
                 }
-                if(values.size()) {
+                if(noNulls.size()) {
                     flag = true;
                     std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
                     where += (" AND " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(noNulls) + ")");
