@@ -203,16 +203,6 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
         std::string parsedRow = "";
         for(size_t i = 0; i < cols.size(); i++) {
             auto col = cols[i];
-            /*
-            if(col.index >= values.size()) {
-                std::cout << "Col index and values size: \n";
-                for(auto& val : values) std::cout << val << " | ";
-                std::cout << '\n';
-                std::cout << col.index << " | " << values.size() << '\n';
-            }
-            std::cout <<  col.index << '\n';
-            assert(col.index < values.size());
-            */
             if(i > 0) {
                 parsedRow += DELIMITER;
             }
@@ -317,7 +307,6 @@ int main(int argc, char** argv)
                 if(directDescendants.count(currentTable) > 0 && directDescendants[currentTable]) {
                     directDescendants[dependentTable] = true;
                 } else if(directDescendants.count(dependentTable) == 0) {
-                    std::cout << "depTable: " << dependentTable << " -- " << currentTable << '\n';
                     outsideTables[dependentTable] = true;
                 }
 
@@ -378,7 +367,6 @@ int main(int argc, char** argv)
         }
 
         int outsideTablesSize = outsideTables.size(), directDescendantsSize = directDescendants.size();
-        std::cout << outsideTablesSize << " vs. " << directDescendantsSize << '\n';
         assert(outsideTables.size() + directDescendants.size() == seen.size());
 
         for(auto& table : seen) {
@@ -463,11 +451,9 @@ int main(int argc, char** argv)
             },
             ("select * from " + std::string(argv[1]) + " where id = " + std::string(argv[2])));
 
-        std::cout << "supplier stuff: " << tableColValues[std::string(argv[1])]["id"][0] << '\n';
         // maybe need to rethink this
         auto whereCondition = [&](std::string tableName) {
             std::string whereCondition = "";
-            std::cout << tableName << '\n';
             bool first = true;
             for(auto& dep : depCopy[tableName]) {
                 std::string tableCol = fkeys[tableName][dep];
@@ -494,43 +480,17 @@ int main(int argc, char** argv)
 
         int64_t totalRows = 0;
 
-        std::cout << "<-------------------------------------------->\nORDER:\n";
-        for(auto& l : L) {
-            //runTable(l);
-            std::cout << l << '\n';
-        }
-
-        std::cout << "<--------------->\nDirect Descendants:\n";
-        for(auto& entry : directDescendants) {
-            if(entry.second) {
-                std::cout << entry.first << '\n';
-            }
-        }
-
-        std::cout << "<--------------->\nNOT Direct Descendants:\n";
-        for(auto& table : others) {
-            std::cout << table << '\n';
-        }
-        
-        std::cout << "<--------------------------------------------------\nDATA SEARCH:\n";
         std::vector<std::string> descendantSet = {};
         for(auto& l : L) {
             if(directDescendants.count(l) > 0 && directDescendants[l]) {
-                std::cout << l << '\n';
                 descendantSet.push_back(l);
             }
-        }
-
-        for(auto& l : othersL) {
-            std::cout << l << '\n';
         }
 
         auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable, std::string option = "desc"){
             // in /data_search
             std::string fkeysVal = option == "desc" ? fkeys[tableName][dependantTable] : fkeys[dependantTable][tableName];
             std::string fkeyCol = option == "desc" ? fkeyCols[dependantTable][fkeys[tableName][dependantTable]] : fkeysVal;
-            std::cout << "GET VALUES: " << fkeysVal << '\n';
-            std::cout << "fkeyCols: " << fkeyCols[tableName][fkeysVal] << '\n';
             // need fkey from dependant table
             // eventually could probably use better file handling but for now this is probably fine...
             std::ifstream infile("../../" + dependantTable + "/data_search/" + dependantTable + "_parsed.csv");
@@ -552,8 +512,6 @@ int main(int argc, char** argv)
                             fkeyColIndex = idx; break;
                         }
                     }
-                    std::cout << "table and dep table: " << tableName << " | " << dependantTable << '\n';
-                    std::cout << "fkeyCol: " << fkeyCol << '\n';
                     assert(fkeyColIndex != INT_MIN);
                 } else {
                     values.push_back(lineValues[fkeyColIndex]);
@@ -599,9 +557,7 @@ int main(int argc, char** argv)
                     flag = true;
                     std::string foreignWrappedTableName = "\"" + foreignKey + "\"";
                     where += (" OR " + foreignWrappedTableName + " IN " + "(" + valuesFromVector(noNulls) + ")");
-                } else {
-                    std::cout << "No associative values for: " << tableName << '\n';
-                }
+                }  
             }
             return where;
         };
@@ -632,7 +588,6 @@ int main(int argc, char** argv)
             //command += " --password=postgres";
             command += " --dbname=deductions_app_development";
             command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' HEADER")";
-            std::cout << "Copy To Command: " << command << std::endl;
             return command;
         };
 
@@ -645,7 +600,6 @@ int main(int argc, char** argv)
                 fs::create_directory(dataSearchPath);
                 fs::current_path(dataSearchPath);
                 std::string query = dataSearchTable(tableName, option);
-                std::cout << tableName << '\n';
                 std::ofstream fout(tableName + ".csv");
                 std::ofstream parsed(tableName + "_parsed.csv");
                 bool firstRow = true;
@@ -655,7 +609,7 @@ int main(int argc, char** argv)
                 std::string cmd = psqlCopyToCommand(tableName, query);
                 int result = system(cmd.c_str());
                 if(!result) {
-                    std::cout << "Copied " << tableName << " from source successful\n!";
+                    std::cout << "Copied " << tableName << " from source successful!\n";
                 } 
                 std::ifstream infile(tableName + "_bulk_copy.csv");
                 std::string header;
@@ -674,7 +628,6 @@ int main(int argc, char** argv)
                         cols.push_back(col);
                     }
                     if(cols.size()) { // only create _parsed file if there are columns needed
-                        std::cout << "Parsing row data for: " << tableName << '\n';
                         parseRawRowData(rawInfile, parsed, cols, totalRows);
                     }
                 }
