@@ -69,6 +69,24 @@ std::unordered_map<std::string, int8_t> columnIndexesFromRow(std::unordered_set<
     return colIndexes;
 }
 
+
+std::unordered_map<std::string, int8_t> columnIndexesFromHeader(std::unordered_set<std::string> columns, const std::string& header) {
+    std::stringstream headerStream(header);
+    std::string col;
+    std::unordered_map<std::string, int8_t> colIndexes;
+    size_t colIndex = 0;
+    while(std::getline(headerStream, col, DELIMITER)) {
+        for(auto& colName : columns){
+            if(col == colName) {
+                colIndexes[col] = colIndex;
+                break;
+            }
+        }
+        colIndex++;
+    }
+    return colIndexes;
+}
+
 std::string getChildrenQuery = R"(SELECT
         tc.table_schema, 
         tc.constraint_name, 
@@ -168,7 +186,13 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
     if(cols.size() == 0) return;
     std::string str;
     bool firstLine = true;
+    std::string header;
+    int lineNumber = 0;
     while(std::getline(infile, str)) {
+        if(!lineNumber) {
+            lineNumber++; continue;
+        }
+        lineNumber++;
         totalRows++;
         std::vector<std::string> values;
         std::stringstream lineStream(str);
@@ -567,7 +591,7 @@ int main(int argc, char** argv)
                 std::vector<std::string> values = getValuesForTable(tableName, dependantTable, "nondesc");
                 std::vector<std::string> noNulls;
                 for(auto& val : values) {
-                    if(val.size() > 0) {
+                    if(val != "\\N") {
                         noNulls.push_back(val);
                     }
                 }
@@ -607,7 +631,7 @@ int main(int argc, char** argv)
             command += " --username=postgres";
             //command += " --password=postgres";
             command += " --dbname=deductions_app_development";
-            command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' CSV")";
+            command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' HEADER")";
             std::cout << "Copy To Command: " << command << std::endl;
             return command;
         };
@@ -621,46 +645,26 @@ int main(int argc, char** argv)
                 fs::create_directory(dataSearchPath);
                 fs::current_path(dataSearchPath);
                 std::string query = dataSearchTable(tableName, option);
-                //std::cout << "-------------------------\n" <<  query << '\n';
                 std::cout << tableName << '\n';
                 std::ofstream fout(tableName + ".csv");
                 std::ofstream parsed(tableName + "_parsed.csv");
                 bool firstRow = true;
                 std::unordered_map<std::string, int8_t> colIndexes;
                 std::unordered_set<std::string> neededFkeyColumns = neededFKeys[tableName];
-                //for(auto& f : neededFkeyColumns) std::cout << f << '\n';
                 size_t numberOfRows = 0;
                 std::string cmd = psqlCopyToCommand(tableName, query);
                 int result = system(cmd.c_str());
                 if(!result) {
                     std::cout << "Copied " << tableName << " from source successful\n!";
                 } 
-                conn.execute([&](auto&& r)
-                {
-                    numberOfRows++;
-                    if(firstRow) {
-                        firstRow = false;
-                        colIndexes = columnIndexesFromRow(neededFkeyColumns, r);
-                    }
-
-                    using dmitigr::pgfe::to;
-                    bool firstCol = true;
-                    for(auto& col : r) {
-                        if(!firstCol){
-                            fout << DELIMITER;
-                        } else {
-                            firstCol = false;
-                        }
-                        std::string colValue =to<std::string>(r[col.first]);
-                        colValue.erase(std::remove(colValue.begin(), colValue.end(), '\n'), colValue.cend());
-                        fout << colValue;
-                    }
-                    fout << std::endl;
-                },
-                (query));
+                std::ifstream infile(tableName + "_bulk_copy.csv");
+                std::string header;
+                std::getline(infile, header);
+                std::string dataRowOne;
+                colIndexes = columnIndexesFromHeader(neededFkeyColumns, header);
                 fout.close();
-                if(numberOfRows) {
-                    std::ifstream rawInfile(tableName + ".csv");
+                if(std::getline(infile, dataRowOne)) {
+                    std::ifstream rawInfile(tableName + "_bulk_copy.csv");
                     std::vector<RawColumn> cols;
                     for(auto& fkey : neededFkeyColumns) {
                         RawColumn col;
@@ -670,6 +674,7 @@ int main(int argc, char** argv)
                         cols.push_back(col);
                     }
                     if(cols.size()) { // only create _parsed file if there are columns needed
+                        std::cout << "Parsing row data for: " << tableName << '\n';
                         parseRawRowData(rawInfile, parsed, cols, totalRows);
                     }
                 }
@@ -707,7 +712,7 @@ int main(int argc, char** argv)
         // write psql \copy from commands
         
         auto psqlCopyFromCommand = [&](const std::string& tableName) {
-            std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + ".csv";
+            std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + "_bulk_copy.csv";
             std::stringstream ss;
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
@@ -718,7 +723,7 @@ int main(int argc, char** argv)
             command += " --username=postgres";
             //command += " --password=postgres";
             command += " --dbname=postgres";
-            command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' CSV")";
+            command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
 
