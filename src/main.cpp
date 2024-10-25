@@ -590,6 +590,28 @@ int main(int argc, char** argv)
         fs::create_directory(dataDirectory);
         fs::current_path(dataDirectory);
 
+        auto psqlCopyToCommand = [&](const std::string& tableName, const std::string& query) {
+            // in ~data
+            std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + ".csv";
+            std::string pathToCopyTo = fs::current_path().string() + "/" + tableName + "_bulk_copy.csv";
+            std::ofstream outfile(pathToCopyTo);
+            outfile << "Foo\n";
+            outfile.close();
+            std::stringstream ss;
+            ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
+            std::string hexDelimiter = ss.str();
+            std::string command = "PGPASSWORD=postgres";
+            command += " psql";
+            command += " --host=localhost";
+            command += " --port=5433";
+            command += " --username=postgres";
+            //command += " --password=postgres";
+            command += " --dbname=deductions_app_development";
+            command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' CSV")";
+            std::cout << "Copy To Command: " << command << std::endl;
+            return command;
+        };
+
         auto doTableDataSearch = [&](std::vector<std::string> tableList, std::unordered_map<std::string, std::unordered_set<std::string>> neededFKeys, std::string option = "desc") {
             for(auto& tableName : tableList) {
                 fs::create_directory(fs::path(tableName));
@@ -599,15 +621,20 @@ int main(int argc, char** argv)
                 fs::create_directory(dataSearchPath);
                 fs::current_path(dataSearchPath);
                 std::string query = dataSearchTable(tableName, option);
-                std::cout << "-------------------------\n" <<  query << '\n';
+                //std::cout << "-------------------------\n" <<  query << '\n';
                 std::cout << tableName << '\n';
                 std::ofstream fout(tableName + ".csv");
                 std::ofstream parsed(tableName + "_parsed.csv");
                 bool firstRow = true;
                 std::unordered_map<std::string, int8_t> colIndexes;
                 std::unordered_set<std::string> neededFkeyColumns = neededFKeys[tableName];
-                for(auto& f : neededFkeyColumns) std::cout << f << '\n';
+                //for(auto& f : neededFkeyColumns) std::cout << f << '\n';
                 size_t numberOfRows = 0;
+                std::string cmd = psqlCopyToCommand(tableName, query);
+                int result = system(cmd.c_str());
+                if(!result) {
+                    std::cout << "Copied " << tableName << " from source successful\n!";
+                } 
                 conn.execute([&](auto&& r)
                 {
                     numberOfRows++;
