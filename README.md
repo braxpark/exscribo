@@ -5,7 +5,7 @@ _to copy_
 
 
 ## tldr
-This tool copies data from a source databse to a destination database. For now this only supports Postgres.
+This tool copies data from a source database to a destination database. For now this only supports Postgres.
 Given some table and id, this will copy all relevant rows based on a source database's schema to a destination database.
 
 This generates the schema map and determines which rows fit in to that schema map based on the "root" table passed in as a param. 
