@@ -20,3 +20,18 @@ This has a couple of key requirements:
     It is strongly suggested to have the destination database be empty as no id mappings are currently performed when copying data. If the destination database is not empty, it runs the risk of some copied rows having identical id values to existing rows.
   </li>
 </ul>
+
+
+## installation
+This project uses submodules for the Postgres Driver (pgfe) and JSON (struct_mapping). These will need to be pulled if trying to build from source.
+
+This project links to `libpq` and requires some header files. So, these need to be path accessible, the executable on the `PATH` and the header files on whichever global c++ path your compiler uses. For GCC, it's `CPLUS_INCLUDE_PATH`.
+
+This project uses premake5 as its build tool. 
+
+Once the above have been installed and prepared:
+
+  - Run the `setup.sh` script in the root directory of this repository to copy over the header files for both `pgfe` and `struct_mapping`.
+  - Run `premake5 gmake2` or whichever target you want to build for.
+  - In the root directory of this repository, run `make` (again if building for gnu makefiles).
+
