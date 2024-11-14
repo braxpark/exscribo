@@ -38,6 +38,7 @@ test.*
 /bin
 /src/bin
 /src/Makefile
+/src/include
 
 Makefile*
 

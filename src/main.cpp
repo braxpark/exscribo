@@ -1,6 +1,7 @@
-#include "include/src/pgfe/data.hpp"
-#include "include/src/pgfe/exceptions.hpp"
-#include "include/src/pgfe/pgfe.hpp"
+//#include "include/src/pgfe/data.hpp"
+#include "include/pgfe/data.hpp"
+#include "include/pgfe/exceptions.hpp"
+#include "include/pgfe/pgfe.hpp"
 #include <cassert>
 #include <chrono>
 #include <climits>
@@ -13,7 +14,7 @@
 #include <unordered_set>
 #include <vector>
 #include <map>
-#include "struct_mapping/struct_mapping.h"
+#include "include/struct_mapping/struct_mapping.h"
 
 namespace fs = std::filesystem;
 

@@ -1,3 +1,6 @@
 [submodule "pgfe"]
 	path = pgfe
 	url = https://github.com/dmitigr/pgfe
+[submodule "struct_mapping"]
+	path = struct_mapping
+	url = https://github.com/bk192077/struct_mapping

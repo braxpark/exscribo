@@ -1,11 +1,12 @@
-workspace("cpp_schema")
+workspace("exscribo")
 configurations({ "Debug", "Release" })
 
-local projectName = "cpp_schema"
+local projectName = "exscribo"
 local projectKind = "ConsoleApp"
 local lang = "C++"
 local standard = lang .. "20"
-local includePath = "src/include/"
+local pgfeIncludePath = "pgfe/src/pgfe/"
+local structMappingIncludePath = "struct_mapping/include/struct_mapping/"
 
 local srcFiles = {
 	"src/**",
@@ -17,12 +18,12 @@ local excludeSrcFiles = {
 }
 
 project(projectName)
-	kind(projectKind)
-	language(lang)
-	cppdialect(standard)
-	targetdir("bin/%{cfg.buildcfg}")
-	location("src/")
-	files(srcFiles)
-	removefiles({ excludeSrcFiles })
-	includedirs({ includePath })
-	links({ "pq" })
+kind(projectKind)
+language(lang)
+cppdialect(standard)
+targetdir("bin/%{cfg.buildcfg}")
+location("src/")
+files(srcFiles)
+removefiles({ excludeSrcFiles })
+includedirs({ pgfeIncludePath, structMappingIncludePath })
+links({ "pq" })
