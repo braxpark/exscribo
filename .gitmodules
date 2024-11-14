@@ -1,0 +1,3 @@
+[submodule "pgfe"]
+	path = pgfe
+	url = https://github.com/dmitigr/pgfe
