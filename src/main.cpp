@@ -571,23 +571,27 @@ int main(int argc, char** argv)
         fs::create_directory(dataDirectory);
         fs::current_path(dataDirectory);
 
+        auto psqlCommand = [&]() {
+            std::string command = "PGPASSWORD=" + config.password;
+            command += " psql";
+            command += (" --host=" + config.host);
+            command += (" --port=" + std::to_string(config.port));
+            command += (" --username=" + config.username);
+            command += (" --dbname=" + config.dbName);
+            command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
+            return command;
+        }
+
         auto psqlCopyToCommand = [&](const std::string& tableName, const std::string& query) {
             // in ~data
             std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + ".csv";
             std::string pathToCopyTo = fs::current_path().string() + "/" + tableName + "_bulk_copy.csv";
             std::ofstream outfile(pathToCopyTo);
-            outfile << "Foo\n";
             outfile.close();
             std::stringstream ss;
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
-            std::string command = "PGPASSWORD=postgres";
-            command += " psql";
-            command += " --host=localhost";
-            command += " --port=5433";
-            command += " --username=postgres";
-            //command += " --password=postgres";
-            command += " --dbname=deductions_app_development";
+            std::string command = psqlCommand();
             command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
@@ -662,27 +666,17 @@ int main(int argc, char** argv)
         }
         outfile << numSeenRows << std::endl;
 
-
-        // write psql \copy from commands
-        
         auto psqlCopyFromCommand = [&](const std::string& tableName) {
             std::string pathToTableData = fs::current_path().string() + "/" + tableName + "/data_search/" + tableName + "_bulk_copy.csv";
             std::stringstream ss;
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
-            std::string command = "PGPASSWORD=postgres";
-            command += " psql";
-            command += " --host=localhost";
-            command += " --port=5433";
-            command += " --username=postgres";
-            //command += " --password=postgres";
-            command += " --dbname=postgres";
+            std::string command = psqlCommand();
             command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
 
         outfile << "<------------->\n";
-        
         for(auto& t : L) {
             std::string command = psqlCopyFromCommand(t);
             int commandSysResult = system(command.c_str());
@@ -693,7 +687,6 @@ int main(int argc, char** argv)
         }
 
         outfile.close();
-        
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
