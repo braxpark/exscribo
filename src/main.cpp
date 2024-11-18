@@ -1,4 +1,3 @@
-//#include "include/src/pgfe/data.hpp"
 #include "include/pgfe/data.hpp"
 #include "include/pgfe/exceptions.hpp"
 #include "include/pgfe/pgfe.hpp"
@@ -12,8 +11,6 @@
 #include <iostream>
 #include <string>
 #include <unordered_set>
-#include <vector>
-#include <map>
 #include "include/struct_mapping/struct_mapping.h"
 
 namespace fs = std::filesystem;
@@ -356,7 +353,7 @@ int main(int argc, char** argv)
         auto hasIncomingEdges =[&](const std::string& table) {
             return inv.count(table) > 0;
         };
-        
+
         // kahn's algorithm
         std::vector<std::string> L;
         std::queue<std::string> S;
@@ -374,7 +371,7 @@ int main(int argc, char** argv)
             if(deps[table].size() == 0) {
                 S.push(table);
             }
-        }   
+        }
 
         auto invCopyS = inv;
         auto depsCopyS = deps;
@@ -442,17 +439,11 @@ int main(int argc, char** argv)
             {
                 using dmitigr::pgfe::to;
                 auto id = to<std::string>(r["id"]);
-                tableColValues[std::string(argv[1])]["id"].push_back(id); // values = tableColValues[table_A][col_in_table_A];
-                /*
-                for(auto& col : tableFkeyNeeds[argv[1]]) {
-                    auto val = to<std::string>(r[col]);
-                    tableColValues[std::string(argv[1])][col].push_back(val);
-                }
-                */
+                tableColValues[std::string(argv[1])]["id"].push_back(id);
             },
             ("select * from " + std::string(argv[1]) + " where id = " + std::string(argv[2])));
 
-        // maybe need to rethink this
+        // maybe need to rethink this, is the most exhaustive exclusion by using AND always right?
         auto whereCondition = [&](std::string tableName) {
             std::string whereCondition = "";
             bool first = true;
@@ -591,7 +582,13 @@ int main(int argc, char** argv)
             std::stringstream ss;
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
-            std::string command = psqlCommand();
+            // this is the write to db command:w
+            std::string command = "PGPASSWORD=" + config.password;
+            command += " psql";
+            command += (" --host=localhost");
+            command += (" --port=5443");
+            command += (" --username=postgres");
+            command += (" --dbname=postgres");
             command += R"( -c "\copy ()" + query + ") TO '" + pathToCopyTo + "'" +  R"( DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
@@ -687,6 +684,7 @@ int main(int argc, char** argv)
         }
 
         outfile.close();
+        // still need to do cleanup of locally written files
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
