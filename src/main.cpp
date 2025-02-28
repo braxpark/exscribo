@@ -11,6 +11,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_set>
+#include <map>
 #include "include/struct_mapping/struct_mapping.h"
 
 namespace fs = std::filesystem;
@@ -40,6 +41,8 @@ struct RawColumn {
 };
 
 const char DELIMITER = 29;
+
+const std::string hexDelimiter = "1D";
 
 void parseFileIntoConfig(const std::string fileName, DatabaseInfo& config) {
     // Assume file exists and is accessible
@@ -562,7 +565,7 @@ int main(int argc, char** argv)
         fs::create_directory(dataDirectory);
         fs::current_path(dataDirectory);
 
-        auto psqlCommand = [&]() {
+        auto psqlCommand = [&](const std::string& tableName, const std::string& pathToTableData) {
             std::string command = "PGPASSWORD=" + config.password;
             command += " psql";
             command += (" --host=" + config.host);
@@ -571,7 +574,7 @@ int main(int argc, char** argv)
             command += (" --dbname=" + config.dbName);
             command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
-        }
+        };
 
         auto psqlCopyToCommand = [&](const std::string& tableName, const std::string& query) {
             // in ~data
@@ -668,7 +671,7 @@ int main(int argc, char** argv)
             std::stringstream ss;
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
-            std::string command = psqlCommand();
+            std::string command = psqlCommand(tableName, pathToTableData);
             command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
