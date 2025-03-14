@@ -49,3 +49,7 @@ source.json
 dataSource.json
 
 data/
+
+
+
+*.env
