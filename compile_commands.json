@@ -1,16 +1,23 @@
 [
   {
     "arguments": [
-      "/usr/bin/clang++-18",
-      "-c",
+      "/usr/bin/clang++",
+      "-I../pgfe/src/pgfe",
+      "-I../struct_mapping/include/struct_mapping",
       "-std=c++20",
-      "-I/opt/homebrew/include/postgresql@14/include",
+      "-c",
+      "-I",
+      "/opt/homebrew/Cellar/libpq/17.0/include",
+      "-I",
+      "/opt/homebrew/include/postgresql@14",
+      "-I",
+      ".",
       "-o",
-      "main",
-      "src/main.cpp"
+      "obj/Debug/main.o",
+      "main.cpp"
     ],
-    "directory": "~/projects/cpp_schema/",
-    "file": "~/projects/cpp_schema/src/main.cpp",
-    "output": "~/projects/cpp_schema/bin/Debug/cpp_schema"
+    "directory": "/Users/braxtonparker/programming/exscribo/src",
+    "file": "/Users/braxtonparker/programming/exscribo/src/main.cpp",
+    "output": "/Users/braxtonparker/programming/exscribo/src/obj/Debug/main.o"
   }
 ]
