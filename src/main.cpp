@@ -23,10 +23,15 @@ enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSO
 struct DatabaseInfo {
     std::string host;
     int port;
-    std::string dbName;
+    std::string name;
     std::string username;
     std::string password;
     bool sslEnabled;
+};
+
+struct DBConfig {
+    DatabaseInfo source;
+    DatabaseInfo destination;
 };
 
 struct ColInfo {
@@ -44,18 +49,22 @@ const char DELIMITER = 29;
 
 const std::string hexDelimiter = "1D";
 
-void parseFileIntoConfig(const std::string fileName, DatabaseInfo& config) {
+void parseFileIntoConfig(const std::string fileName, DBConfig& config) {
     // Assume file exists and is accessible
     std::ifstream ifs(fileName);
     assert(ifs.good());
     std::string content( (std::istreambuf_iterator<char>(ifs) ), (std::istreambuf_iterator<char>()));
     std::stringstream ssContent(content);
+
+    struct_mapping::reg(&DBConfig::source, "source");
+    struct_mapping::reg(&DBConfig::destination, "destination");
     struct_mapping::reg(&DatabaseInfo::host, "host");
     struct_mapping::reg(&DatabaseInfo::port, "port");
-    struct_mapping::reg(&DatabaseInfo::dbName, "dbName");
+    struct_mapping::reg(&DatabaseInfo::name, "name");
     struct_mapping::reg(&DatabaseInfo::username, "username");
     struct_mapping::reg(&DatabaseInfo::password, "password");
     struct_mapping::reg(&DatabaseInfo::sslEnabled, "sslEnabled");
+
     struct_mapping::map_json_to_struct(config, ssContent);
 }
 
@@ -227,9 +236,9 @@ void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<
 
 int main(int argc, char** argv)
 {
-    DatabaseInfo config;
-    parseFileIntoConfig("dataSource.json", config);
-    std::cout << config.host << " - " << config.port << config.dbName << " - " << config.username << " - " << config.password << " - "  << config.sslEnabled << '\n';
+    DBConfig config;
+    parseFileIntoConfig(".env", config);
+    std::cout << config.source.host << " - " << config.source.port << " - " << config.source.name << " - " << config.source.username << " - " << config.source.password << " - "  << config.source.sslEnabled << '\n';
     std::cout << "Params: \n";
     for(int i = 0; i < argc; i++) {
         std::cout << argv[i] <<  '\n';
@@ -240,25 +249,27 @@ int main(int argc, char** argv)
     try {
         pgfe::Connection conn{pgfe::Connection_options{}
         .set(pgfe::Communication_mode::net)
-        .set_hostname(config.host)
-        .set_port(config.port)
-        .set_database(config.dbName)
-        .set_username(config.username)
-        .set_password(config.password)
-        .set_ssl_enabled(config.sslEnabled)};
+        .set_hostname(config.source.host)
+        .set_port(config.source.port)
+        .set_database(config.source.name)
+        .set_username(config.source.username)
+        .set_password(config.source.password)
+        .set_ssl_enabled(config.source.sslEnabled)};
 
         conn.connect();
-            
+        
+        /*
         pgfe::Connection local{pgfe::Connection_options{}
             .set(pgfe::Communication_mode::net)
             .set_hostname("localhost")
-            .set_port(5443)
-            .set_database("postgres")
+            .set_port(5433)
+            .set_database("deductions_app_development")
             .set_username("postgres")
             .set_password("postgres")
             //.set_ssl_enabled(true)
         };
         //local.connect();
+        */
         
         std::unordered_set<std::string> seen;
         std::unordered_map<std::string, bool> directDescendants;
@@ -443,35 +454,11 @@ int main(int argc, char** argv)
                 using dmitigr::pgfe::to;
                 auto id = to<std::string>(r["id"]);
                 tableColValues[std::string(argv[1])]["id"].push_back(id);
+                for(auto col : r) {
+                    //std::cout << to<std::string>(col) << '\n';
+                }
             },
             ("select * from " + std::string(argv[1]) + " where id = " + std::string(argv[2])));
-
-        // maybe need to rethink this, is the most exhaustive exclusion by using AND always right?
-        auto whereCondition = [&](std::string tableName) {
-            std::string whereCondition = "";
-            bool first = true;
-            for(auto& dep : depCopy[tableName]) {
-                std::string tableCol = fkeys[tableName][dep];
-                std::string mappedTableCol = fkeyCols[dep][tableCol];
-                std::vector<std::string> values = tableColValues[dep][fkeyCols[dep][fkeys[tableName][dep]]];
-                std::string currentCondition = "";
-                    if(first) {
-                        currentCondition = "WHERE ";
-                        first = false;
-                    } else {
-                        currentCondition = " AND ";
-                    }
-                    currentCondition += ("\"" + fkeys[tableName][dep]);
-                    currentCondition += "\" IN (";
-
-                if(values.size() > 0) {
-                    currentCondition += valuesFromVector(values);
-                } else currentCondition += "NULL";
-                currentCondition += ")";
-                whereCondition += currentCondition;
-            }
-            return whereCondition;
-        };
 
         int64_t totalRows = 0;
 
@@ -481,7 +468,11 @@ int main(int argc, char** argv)
                 descendantSet.push_back(l);
             }
         }
-
+        for(auto desc : descendantSet) {
+            std::cout << desc << '\n';
+        }
+        return 0;
+        /*
         auto getValuesForTable = [&](const std::string& tableName, const std::string& dependantTable, std::string option = "desc"){
             // in /data_search
             std::string fkeysVal = option == "desc" ? fkeys[tableName][dependantTable] : fkeys[dependantTable][tableName];
@@ -566,12 +557,12 @@ int main(int argc, char** argv)
         fs::current_path(dataDirectory);
 
         auto psqlCommand = [&](const std::string& tableName, const std::string& pathToTableData) {
-            std::string command = "PGPASSWORD=" + config.password;
+            std::string command = "PGPASSWORD=" + config.source.password;
             command += " psql";
-            command += (" --host=" + config.host);
-            command += (" --port=" + std::to_string(config.port));
-            command += (" --username=" + config.username);
-            command += (" --dbname=" + config.dbName);
+            command += (" --host=" + config.source.host);
+            command += (" --port=" + std::to_string(config.source.port));
+            command += (" --username=" + config.source.username);
+            command += (" --dbname=" + config.source.name);
             command += R"( -c "\copy )" + tableName + R"( FROM ')" + pathToTableData + R"(' WITH DELIMITER )" + hexDelimiter + R"(' HEADER")";
             return command;
         };
@@ -586,7 +577,7 @@ int main(int argc, char** argv)
             ss << "E'\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(DELIMITER));
             std::string hexDelimiter = ss.str();
             // this is the write to db command:w
-            std::string command = "PGPASSWORD=" + config.password;
+            std::string command = "PGPASSWORD=" + config.source.password;
             command += " psql";
             command += (" --host=localhost");
             command += (" --port=5443");
@@ -688,14 +679,12 @@ int main(int argc, char** argv)
 
         outfile.close();
         // still need to do cleanup of locally written files
+        */
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
         std::cout << "Program ran in: " << elapsedTime.count() << '\n';
         std::cout << "Total Number of Rows: " << totalRows << '\n';
-        std::string foo = "foo";
-        auto stringMaxSize = foo.max_size();
-        std::cout << "Max string size: " << stringMaxSize << '\n';
         std::cout << fs::current_path() << '\n';
 
     } catch (const pgfe::Server_exception& e) {
