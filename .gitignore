@@ -49,6 +49,8 @@ source.json
 dataSource.json
 
 data/
+struct_mapping/
+pgfe/
 
 
 
