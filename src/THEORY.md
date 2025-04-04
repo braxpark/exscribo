@@ -41,3 +41,10 @@ TABLE NAME  (map -> map[table_name][dependent_table][table_col_name] -> destinat
     - ALSO STORE THE INVERSE
       - DESTINATION FKEY COLUMN
       - LOCAL FKEY COLUMN
+
+
+TODO:
+- Query and Insert
+    - Generating queries for query op per table (joins on table where table.fkey_col IN( list of ids previously queried for));
+    - store in flat files results of queries, defined structure and cleanup. Maybe we can have a defer.cleanup() like in zig?
+
