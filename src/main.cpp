@@ -3,22 +3,47 @@
 #include "include/pgfe/pgfe.hpp"
 #include <cassert>
 #include <chrono>
-#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <unordered_set>
-#include <map>
+#include <iterator>
 #include "include/struct_mapping/struct_mapping.h"
 
 namespace fs = std::filesystem;
 
 namespace pgfe = dmitigr::pgfe;
 using std::string, std::vector, std::unordered_map, std::unordered_set, std::queue;
+
+const char DELIMITER = '\x1F';
+
+
+// Overload the << operator for std::vector
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
+    os << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        os << vec[i];
+        if (i != vec.size() - 1) {
+            os << ", "; // Add a comma and space between elements
+        }
+    }
+    os << "]";
+    return os;
+}
+
+struct CopyFromSupporters {
+    std::unordered_map<std::string, std::string> tableToCol;
+    std::unordered_map<std::string, std::string> tableToFilePath;
+};
+
+struct CopyFromDependent {
+    std::string tableName;
+    std::string filePath;
+};
 
 enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
 
@@ -47,7 +72,6 @@ struct RawColumn {
     int index;
 };
 
-const char DELIMITER = '\x1F';
 
 void parseFileIntoConfig(const std::string fileName, DBConfig& config) {
     // Assume file exists and is accessible
@@ -138,6 +162,8 @@ std::string valuesFromVector(const std::vector<std::string>& vec, const std::str
     copy(vec.begin(), vec.end(), std::ostream_iterator<std::string>(s, ","));
     return s.str().substr(0, s.str().length() - 1);
 }
+
+
 
 std::string getRowsByFKEYQuery(const std::string& tableName, const std::string& colName, const std::string& colValue, bool isString = false, const std::string& where = "") {
     const std::string value = isString ? "'" + colValue + "'" : colValue;
@@ -255,7 +281,6 @@ std::vector<std::string> topoSort(
     }
     while(!S.empty()) {
         Table* curr = S.front();
-        std::cout << *curr <<'\n';
         S.pop();
         L.push_back(curr->name);
         for(auto it = curr->dependents.begin(); it != curr->dependents.end(); ) {
@@ -316,7 +341,6 @@ int main(int argc, char** argv)
             } else {
                 visited_tables.insert(curr_table);
             }
-            std::cout << "Processing table: " << curr_table << '\n';
             table_info[curr_table].name = curr_table;
             string get_dependents_query = dependent_query + "'" + curr_table + "'";
             conn.execute([&](auto&& row)
@@ -325,8 +349,8 @@ int main(int argc, char** argv)
                     string dependent_table_name = to<std::string>(row[0]), dependent_table_col_name = to<string>(row[1]); 
                     string supporter_table_name = to<std::string>(row[2]), supporter_table_col_name = to<string>(row[3]);
 
-                    fkey_map[supporter_table_name][dependent_table_name][supporter_table_col_name] = dependent_table_col_name;
-                    inv_fkey_map[supporter_table_name][dependent_table_name][dependent_table_col_name] = supporter_table_col_name;
+                    fkey_map[supporter_table_name][dependent_table_name][supporter_table_col_name] = dependent_table_col_name; //fkey[S][D][S.col] = D.col
+                    inv_fkey_map[supporter_table_name][dependent_table_name][dependent_table_col_name] = supporter_table_col_name; // fkey[S][D][D.col] = S.col
 
                     table_info[dependent_table_name].supporters[supporter_table_name] = supporter_table_col_name;
                     table_info[supporter_table_name].dependents[dependent_table_name] = dependent_table_col_name;
@@ -350,11 +374,7 @@ int main(int argc, char** argv)
             );
         }
 
-        std::cout << "Finished generating dependency map. Starting to sort tables based on dependencies...\n";
         vector<string> sorted_table_names = topoSort(table_info, root_table);
-        for(auto table : sorted_table_names) {
-            std::cout << "Sorted Table: " << table_info[table] << '\n';
-        }
         vector<Table> direct_descendants, non_direct_descendants;
         for(auto table : sorted_table_names) {
             if (table_info[table].direct_descendant) {
@@ -369,8 +389,107 @@ int main(int argc, char** argv)
         vector<Table> insert_order = non_direct_descendants;
         insert_order.insert(insert_order.begin(), direct_descendants.begin(), direct_descendants.end());
 
-        for(auto table : query_order) {
+        fs::create_directory("query_order_results");
+
+        auto psqlGetRootRow = [&config, root_table, root_id]() {
+            std::ostringstream command;
+            const auto& source = config.source; // Access the database source from the config
+            std::string sslMode = source.sslEnabled ? "require" : "disable";
+
+            command << "PGPASSWORD=" + source.password + " psql " +
+            "-h " + source.host + " " +
+            "-p " + std::to_string(source.port) + " " +
+            "-d " + source.name + " " +
+            "-U " + source.username + " ";
+            if(sslMode == "require") {
+                command << "sslmode=require";
+            }
+            command << "<<EOF\n";
+            command << "\\copy (SELECT * FROM " << root_table << " WHERE id = '" << root_id << "') TO '" << fs::absolute(fs::path("query_order_results") / root_table).string() << "' WITH (DELIMITER '\x1F', HEADER);\n" << "EOF";
+            return command.str();
+        };
+
+        auto psqlCopyFrom = [&config, &fkey_map, &inv_fkey_map](CopyFromSupporters supporters, CopyFromDependent dependent) {
+            // Start building the psql command
+            std::ostringstream command;
+            const auto& source = config.source; // Access the database source from the config
+            std::string sslMode = source.sslEnabled ? "require" : "disable";
+
+            command << "PGPASSWORD=" + source.password + " psql " +
+            "-h " + source.host + " " +
+            "-p " + std::to_string(source.port) + " " +
+            "-d " + source.name + " " +
+            "-U " + source.username + " ";
+            if(sslMode == "require") {
+                command << "sslmode=require";
+            }
+            command << " <<EOF\n";
+
+
+            command << "-- Step 1: Start a transaction\n";
+            command << "BEGIN;\n\n";
+
             
+            string sTable, sCol;
+            for(const auto& [table, col] : supporters.tableToCol) {
+                // Step 2: Create a temporary table based on the real table structure
+                command << "-- Step 2: Create a temporary table based on the real table structure\n";
+                // inv_fkey_map[table][dependent.tableName][fkey_map[table][dependent.tableName][col]]
+                command << "CREATE TEMP TABLE TEMP_" << table << " AS SELECT * FROM " << table << " WHERE 1=0;\n";
+
+                // Step 3: Load data into the temporary table using COPY FROM
+                command << "\\copy TEMP_" << table << " FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
+                sTable = table;
+                sCol = col;
+            }
+
+            // Step 4: Export the data from the temporary table to the output file
+            command << "-- Step 4: Export the data from the temporary table to the output file\n";
+            command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM " << dependent.tableName << " "; 
+            for(const auto& [table, col] : supporters.tableToCol) {
+                string dCol = fkey_map[table][dependent.tableName][col];
+                command << "INNER JOIN TEMP_" << table << " ON " << dependent.tableName << ".\"" << dCol << "\" = TEMP_" << table << ".\"" << col << "\" ";
+            }
+
+            command << ") TO '" << dependent.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
+            
+            // Step 5: Commit the transaction
+            command << "-- Step 5: Commit the transaction\n";
+            command << "COMMIT;\n";
+            command << "EOF";
+
+            return command.str();
+        };
+
+        for(auto table : query_order) {
+            if(table.name == root_table) {
+                std::ofstream outfile(fs::absolute(fs::path("query_order_results") / root_table));
+                outfile.close();
+                string psqlGetRootRowCommand = psqlGetRootRow();
+                std::cout << "Command: \n" << psqlGetRootRowCommand << '\n';
+                int command_res = system(psqlGetRootRowCommand.c_str());
+                std::cout << "Command Result: " << command_res << '\n';
+                continue;
+            } 
+            
+            CopyFromSupporters supporters;
+            for(auto supp : table.supporters) {
+                string colName = fkey_map[supp.first][table.name][supp.second];
+                string sWithRespectToD = inv_fkey_map[supp.first][table.name][colName];
+                supporters.tableToCol[supp.first] = sWithRespectToD;
+                supporters.tableToFilePath[supp.first] = fs::absolute(fs::path("query_order_results") / supp.first).string();
+            }
+
+            CopyFromDependent dependent;
+            dependent.tableName = table.name;
+            dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
+
+            auto psqlCopyFromCommand = psqlCopyFrom(supporters, dependent);
+            //std::cout << "Command: \n" << psqlCopyFromCommand << '\n';
+            int command_res = system(psqlCopyFromCommand.c_str());
+            assert(!command_res);
+
+
         }
 
 
@@ -378,7 +497,8 @@ int main(int argc, char** argv)
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
         std::cout << "Program ran in: " << elapsedTime.count() << '\n';
         std::cout << fs::current_path() << '\n';
-
+        //std::cout << "Cleaning query_order_results directory...\n";
+        //fs::remove_all("query_order_results");
         conn.disconnect();
 
     } catch (const pgfe::Server_exception& e) {
