@@ -92,35 +92,6 @@ void parseFileIntoConfig(const std::string fileName, DBConfig& config) {
     struct_mapping::map_json_to_struct(config, ssContent);
 }
 
-std::unordered_map<std::string, int8_t> columnIndexesFromRow(std::unordered_set<std::string> columns, dmitigr::pgfe::Row& row) {
-    std::unordered_map<std::string, int8_t> colIndexes;
-    size_t fieldCount = row.field_count();
-    for(auto& col : columns) {
-        size_t fieldIndex = row.field_index(col);
-        assert(fieldIndex != fieldCount);
-        colIndexes[col] = fieldIndex;
-    }
-    return colIndexes;
-}
-
-
-std::unordered_map<std::string, int8_t> columnIndexesFromHeader(std::unordered_set<std::string> columns, const std::string& header) {
-    std::stringstream headerStream(header);
-    std::string col;
-    std::unordered_map<std::string, int8_t> colIndexes;
-    size_t colIndex = 0;
-    while(std::getline(headerStream, col, DELIMITER)) {
-        for(auto& colName : columns){
-            if(col == colName) {
-                colIndexes[col] = colIndex;
-                break;
-            }
-        }
-        colIndex++;
-    }
-    return colIndexes;
-}
-
 std::string dependent_query = R"(SELECT
         tc.table_name as "tableName", 
         kcu.column_name, 
@@ -151,100 +122,12 @@ std::string supporter_query = R"(SELECT
         AND tc.table_schema='public'
         AND tc.table_name =)";
 
-std::string getTableFieldsAndDataTypes(const std::string& tableName) {
-    return R"(
-        SELECT column_name, is_nullable, data_type
-        FROM information_schema.columns WHERE table_name = ')" + tableName + "'";
-}
-
 std::string valuesFromVector(const std::vector<std::string>& vec, const std::string& delimiter = ",") {
     std::stringstream s;
     copy(vec.begin(), vec.end(), std::ostream_iterator<std::string>(s, ","));
     return s.str().substr(0, s.str().length() - 1);
 }
 
-
-
-std::string getRowsByFKEYQuery(const std::string& tableName, const std::string& colName, const std::string& colValue, bool isString = false, const std::string& where = "") {
-    const std::string value = isString ? "'" + colValue + "'" : colValue;
-    return (R"(
-        SELECT
-            *
-        FROM )" + tableName +
-    R"( WHERE )" + colName +
-    R"( = )" + value + where );
-}
-
-struct sortDepListOnDependencySize {
-    inline bool operator()(std::pair<std::string, std::unordered_set<std::string>>& a, std::pair<std::string, std::unordered_set<std::string>>& b) {
-        return a.second.size() < b.second.size();
-    }
-};
-
-PGDataType getPGDataType(const std::string& dataType) {
-    if(dataType == "integer") return PGDataType::INTEGER;
-    else if(dataType == "bigint") return PGDataType::BIGINT;
-    else if(dataType == "numeric") return PGDataType::NUMERIC;
-    else if(dataType == "boolean") return PGDataType::BOOLEAN;
-    else if(dataType == "character varying") return PGDataType::CHARACTERVARYING;
-    else if(dataType == "text") return PGDataType::TEXT;
-    else if(dataType == "jsonb") return PGDataType::JSONB;
-    else if(dataType == "timestamp without time zone") return PGDataType::TIMESTAMPNOTIMEZONE;
-    else if(dataType == "date") return PGDataType::DATE;
-    return PGDataType::OTHER;
-}
-
-// is there a better way of pattern matching?
-bool pgDataTypeNeedsEnclosedQuotes(const PGDataType& dataType) {
-    std::vector<PGDataType> encloseds = { PGDataType::CHARACTERVARYING, PGDataType::TEXT, PGDataType::JSONB, PGDataType::TIMESTAMPNOTIMEZONE, PGDataType::DATE, PGDataType::OTHER };
-    for(auto& dt : encloseds) {
-        if(dt == dataType) return true;
-    }
-    return false;
-}
-
-
-void parseRawRowData(std::ifstream& infile, std::ofstream& outfile, std::vector<RawColumn> cols, int64_t& totalRows) {
-    if(cols.size() == 0) return;
-    std::string str;
-    bool firstLine = true;
-    std::string header;
-    int lineNumber = 0;
-    while(std::getline(infile, str)) {
-        if(!lineNumber) {
-            lineNumber++; continue;
-        }
-        lineNumber++;
-        totalRows++;
-        std::vector<std::string> values;
-        std::stringstream lineStream(str);
-        std::string cell;
-        while(std::getline(lineStream, cell, DELIMITER)) {
-            values.push_back(cell);
-        }
-        std::string parsedRow = "";
-        for(size_t i = 0; i < cols.size(); i++) {
-            auto col = cols[i];
-            if(i > 0) {
-                parsedRow += DELIMITER;
-            }
-            parsedRow += values[col.index];
-        }
-        if(firstLine) {
-            firstLine = false;
-            std::string colNames = "";
-            for(size_t i = 0; i < cols.size(); i++) {
-                auto col = cols[i];
-                if(i > 0) {
-                    colNames += DELIMITER;
-                }
-                colNames += col.name;
-            }
-            outfile << colNames << std::endl;
-        }
-        outfile << parsedRow << std::endl;
-    }
-}
 struct Table {
     string name;
     bool direct_descendant = false;
