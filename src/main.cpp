@@ -303,9 +303,6 @@ int main(int argc, char** argv)
             "-p " + std::to_string(source.port) + " " +
             "-d " + source.name + " " +
             "-U " + source.username + " ";
-            if(sslMode == "require") {
-                command << "sslmode=require";
-            }
             command << " <<EOF\n";
 
 
@@ -366,14 +363,42 @@ int main(int argc, char** argv)
             CopyFromDependent dependent;
             dependent.tableName = table.name;
             dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
+            std::ofstream outfile(dependent.filePath);
+            outfile.close();
 
             auto psqlCopyFromCommand = psqlCopyFrom(supporters, dependent);
             //std::cout << "Command: \n" << psqlCopyFromCommand << '\n';
             int command_res = system(psqlCopyFromCommand.c_str());
             assert(!command_res);
-
-
         }
+
+        auto psqlCopyTo = [&config](string tableName, string filePath) {
+            // Start building the psql command
+            std::ostringstream command;
+            const auto& destination = config.destination; 
+
+            command << "PGPASSWORD=" + destination.password + " psql " +
+            "-h " + destination.host + " " +
+            "-p " + std::to_string(destination.port) + " " +
+            "-d " + destination.name + " " +
+            "-U " + destination.username + " ";
+            command << " <<EOF\n";
+
+            command << "-- Step 1: Start a transaction\n";
+            command << "BEGIN;\n\n";
+            command << "\\copy " << tableName << " FROM '" << filePath << "' WITH (DELIMITER '\x1F', HEADER);\n";
+            command << "COMMIT;\n";
+            command << "EOF";
+
+            return command.str();
+        };
+
+        for(auto table : insert_order) {
+            string psqlCopyToCommand = psqlCopyTo(table.name, fs::absolute(fs::path("query_order_results") / table.name).string());
+            int command_res = system(psqlCopyToCommand.c_str());
+            assert(!command_res);
+        }
+
 
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
