@@ -45,6 +45,16 @@ struct CopyFromDependent {
     std::string filePath;
 };
 
+struct CopyFromDependents {
+    std::unordered_map<std::string, std::string> tableToCol;
+    std::unordered_map<std::string, std::string> tableToFilePath;
+};
+
+struct CopyFromSupporter {
+    std::string tableName;
+    std::string filePath;
+};
+
 enum PGDataType { NUMERIC, INTEGER, BIGINT, BOOLEAN, CHARACTERVARYING, TEXT, JSONB, TIMESTAMPNOTIMEZONE, DATE, OTHER };
 
 struct DatabaseInfo {
@@ -301,7 +311,8 @@ int main(int argc, char** argv)
             "-h " + source.host + " " +
             "-p " + std::to_string(source.port) + " " +
             "-d " + source.name + " " +
-            "-U " + source.username + " ";
+            "-U " + source.username + " " + 
+            "-v ON_ERROR_STOP=1";
             command << " <<EOF\n";
 
 
@@ -319,58 +330,98 @@ int main(int argc, char** argv)
 
         unordered_set<string> loadedToTemp;
 
+        auto isDirectDescendent = [&](const string& table) {
+            return table_info[table].direct_descendant;
+        };
+
         auto psqlCopyFrom = [&]() {
             return psqlSourceTransaction([&](std::ostringstream& command) {           
                 for(auto table : query_order) {
-                    CopyFromSupporters supporters;
-                    for(auto supp : table.supporters) {
-                        string colName = fkey_map[supp.first][table.name][supp.second];
-                        string sWithRespectToD = inv_fkey_map[supp.first][table.name][colName];
-                        supporters.tableToCol[supp.first] = sWithRespectToD;
-                        supporters.tableToFilePath[supp.first] = fs::absolute(fs::path("query_order_results") / supp.first).string();
+                    if(table.name == root_table) continue;
+                    command << "\\echo  Processing table: " << table.name << "\n";
+
+                    if(table.direct_descendant || (!table.direct_descendant && table.supporters.size() > 0)) {
+                        CopyFromSupporters supporters;
+                        for(auto supp : table.supporters) {
+                            string colName = fkey_map[supp.first][table.name][supp.second];
+                            string sWithRespectToD = inv_fkey_map[supp.first][table.name][colName];
+                            supporters.tableToCol[supp.first] = sWithRespectToD;
+                            supporters.tableToFilePath[supp.first] = fs::absolute(fs::path("query_order_results") / supp.first).string();
+                        }
+
+                        CopyFromDependent dependent;
+                        dependent.tableName = table.name;
+                        dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
+                        std::ofstream outfile(dependent.filePath);
+                        outfile.close();
+                    
+                        for(const auto& [table, col] : supporters.tableToCol) {
+                            if(loadedToTemp.count(table)) continue;
+                            loadedToTemp.insert(table);
+                            command << "CREATE TEMP TABLE \"TEMP_" << table << "\" AS SELECT * FROM \"" << table << "\" WHERE 1=0;\n";
+
+                            command << "\\copy \"TEMP_" << table << "\" FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
+                        }
+
+                        command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM \"" << dependent.tableName << "\" "; 
+                        for(const auto& [sTable, sCol] : supporters.tableToCol) {
+                            if(!table_info[sTable].direct_descendant && table.direct_descendant) continue;
+                            string dCol = fkey_map[sTable][dependent.tableName][sCol];
+                            command << "INNER JOIN \"TEMP_" << sTable << "\" ON \"" << dependent.tableName << "\".\"" << dCol << "\" = \"TEMP_" << sTable << "\".\"" << sCol << "\" ";
+                        }
+
+                        command << ") TO '" << dependent.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
+                    } else {
+                        CopyFromDependents dependents;
+                        for(auto dep : table.dependents) {
+                            string colName = inv_fkey_map[table.name][dep.first][dep.second];
+                            string dWithRespectToS = fkey_map[table.name][dep.first][colName];
+                            dependents.tableToCol[dep.first] = dWithRespectToS;
+                            dependents.tableToFilePath[dep.first] = fs::absolute(fs::path("query_order_results") / dep.first).string();
+                        }
+                        CopyFromSupporter supporter;
+                        supporter.tableName = table.name;
+                        supporter.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
+                        std::ofstream outfile(supporter.filePath);
+                        outfile.close();
+
+                        for(const auto& [table, col] : dependents.tableToCol) {
+                            if(loadedToTemp.count(table)) continue;
+                            loadedToTemp.insert(table);
+                            command << "CREATE TEMP TABLE \"TEMP_" << table << "\" AS SELECT * FROM \"" << table << "\" WHERE 1=0;\n";
+
+                            command << "\\copy \"TEMP_" << table << "\" FROM '" << dependents.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
+                        }
+                        command << "\\copy (SELECT \"" << supporter.tableName << "\".* FROM \"" << supporter.tableName << "\" ";
+                        for(const auto& [table, col] : dependents.tableToCol) {
+                            string sCol = inv_fkey_map[supporter.tableName][table][col];
+                            command << "LEFT JOIN \"TEMP_" << table << "\" ON \"" << supporter.tableName << "\".\"" << sCol << "\" = \"TEMP_" << table << "\".\"" << col << "\" ";
+                        }
+                        command << "WHERE ";
+                        int index = 0;
+                        for(const auto& [table, col] : dependents.tableToCol) {
+                            if(index++ != 0) command << " OR ";
+                            command << "\"TEMP_" << table << "\".\"" << col << "\" IS NOT NULL";
+                        }
+                        command << ") TO '" << supporter.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
                     }
-
-                    CopyFromDependent dependent;
-                    dependent.tableName = table.name;
-                    dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
-                    std::ofstream outfile(dependent.filePath);
-                    outfile.close();
-
-                    string sTable, sCol;
-                    for(const auto& [table, col] : supporters.tableToCol) {
-                        if(loadedToTemp.count(table)) continue;
-                        loadedToTemp.insert(table);
-                        // Step 2: Create a temporary table based on the real table structure
-                        command << "-- Step 2: Create a temporary table based on the real table structure\n";
-                        // inv_fkey_map[table][dependent.tableName][fkey_map[table][dependent.tableName][col]]
-                        command << "CREATE TEMP TABLE TEMP_" << table << " AS SELECT * FROM " << table << " WHERE 1=0;\n";
-
-                        // Step 3: Load data into the temporary table using COPY FROM
-                        command << "\\copy TEMP_" << table << " FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
-                        sTable = table;
-                        sCol = col;
-                    }
-
-                    // Step 4: Export the data from the temporary table to the output file
-                    command << "-- Step 4: Export the data from the temporary table to the output file\n";
-                    command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM " << dependent.tableName << " "; 
-                    for(const auto& [table, col] : supporters.tableToCol) {
-                        string dCol = fkey_map[table][dependent.tableName][col];
-                        command << "INNER JOIN TEMP_" << table << " ON " << dependent.tableName << ".\"" << dCol << "\" = TEMP_" << table << ".\"" << col << "\" ";
-                    }
-
-                    command << ") TO '" << dependent.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
                 }
                 
             });
         };
-
+        
+        auto beforeCopyFromTime = std::chrono::steady_clock::now();
         std::ofstream outfile(fs::absolute(fs::path("query_order_results") / root_table));
         outfile.close();
         string psqlGetRootRowCommand = psqlGetRootRow();
         int command_res = system(psqlGetRootRowCommand.c_str());
 
         auto psqlCopyFromCommand = psqlCopyFrom();
+        std::ofstream fullScriptOutFile("full_script.sql");
+        fullScriptOutFile << "-- This script was generated by the program.\n";
+        fullScriptOutFile << psqlGetRootRowCommand;
+        fullScriptOutFile << psqlCopyFromCommand;
+        fullScriptOutFile.close();
         command_res = system(psqlCopyFromCommand.c_str());
         assert(!command_res);
 
@@ -407,7 +458,9 @@ int main(int argc, char** argv)
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
+        std::chrono::duration<float> elapsedTimeCopyFrom = afterTime - beforeCopyFromTime;
         std::cout << "Program ran in: " << elapsedTime.count() << '\n';
+        std::cout << "CopyFromSource ran in: " << elapsedTimeCopyFrom.count() << '\n';
         std::cout << fs::current_path() << '\n';
         //std::cout << "Cleaning query_order_results directory...\n";
         //fs::remove_all("query_order_results");
