@@ -47,6 +47,7 @@ compile_commands.json
 destination.json
 source.json
 dataSource.json
+full_script.sql
 
 data/
 struct_mapping/
