@@ -363,7 +363,7 @@ int main(int argc, char** argv)
                             command << "\\copy \"TEMP_" << table << "\" FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
                         }
 
-                        command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM \"" << dependent.tableName << "\" "; 
+                        command << "\\copy (SELECT DISTINCT \"" << dependent.tableName<< "\".* FROM \"" << dependent.tableName << "\" "; 
                         for(const auto& [sTable, sCol] : supporters.tableToCol) {
                             if(!table_info[sTable].direct_descendant && table.direct_descendant) continue;
                             string dCol = fkey_map[sTable][dependent.tableName][sCol];
@@ -392,7 +392,7 @@ int main(int argc, char** argv)
 
                             command << "\\copy \"TEMP_" << table << "\" FROM '" << dependents.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
                         }
-                        command << "\\copy (SELECT \"" << supporter.tableName << "\".* FROM \"" << supporter.tableName << "\" ";
+                        command << "\\copy (SELECT DISTINCT \"" << supporter.tableName << "\".* FROM \"" << supporter.tableName << "\" ";
                         for(const auto& [table, col] : dependents.tableToCol) {
                             string sCol = inv_fkey_map[supporter.tableName][table][col];
                             command << "LEFT JOIN \"TEMP_" << table << "\" ON \"" << supporter.tableName << "\".\"" << sCol << "\" = \"TEMP_" << table << "\".\"" << col << "\" ";
@@ -406,10 +406,9 @@ int main(int argc, char** argv)
                         command << ") TO '" << supporter.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
                     }
                 }
-                
             });
         };
-        
+
         auto beforeCopyFromTime = std::chrono::steady_clock::now();
         std::ofstream outfile(fs::absolute(fs::path("query_order_results") / root_table));
         outfile.close();
@@ -439,22 +438,19 @@ int main(int argc, char** argv)
 
             command << "-- Step 1: Start a transaction\n";
             command << "BEGIN;\n\n";
+            command << "\\echo  Processing table: " << tableName << "\n";
             command << "\\copy " << tableName << " FROM '" << filePath << "' WITH (DELIMITER '\x1F', HEADER);\n";
             command << "COMMIT;\n";
             command << "EOF";
 
             return command.str();
         };
-        
-        /*
+
         for(auto table : insert_order) {
             string psqlCopyToCommand = psqlCopyTo(table.name, fs::absolute(fs::path("query_order_results") / table.name).string());
             int command_res = system(psqlCopyToCommand.c_str());
             assert(!command_res);
         }
-        */
-
-
 
         std::chrono::time_point afterTime = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsedTime = afterTime - beforeTime;
