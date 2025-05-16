@@ -292,13 +292,12 @@ int main(int argc, char** argv)
             return command.str();
         };
 
-        auto psqlCopyFrom = [&config, &fkey_map, &inv_fkey_map](CopyFromSupporters supporters, CopyFromDependent dependent) {
-            // Start building the psql command
+        auto psqlSourceTransaction = [&](const std::function<void(std::ostringstream&)>& func) {
             std::ostringstream command;
             const auto& source = config.source; // Access the database source from the config
             std::string sslMode = source.sslEnabled ? "require" : "disable";
 
-            command << "PGPASSWORD=" + source.password + " psql " +
+             command << "PGPASSWORD=" + source.password + " psql " +
             "-h " + source.host + " " +
             "-p " + std::to_string(source.port) + " " +
             "-d " + source.name + " " +
@@ -309,31 +308,8 @@ int main(int argc, char** argv)
             command << "-- Step 1: Start a transaction\n";
             command << "BEGIN;\n\n";
 
-            
-            string sTable, sCol;
-            for(const auto& [table, col] : supporters.tableToCol) {
-                // Step 2: Create a temporary table based on the real table structure
-                command << "-- Step 2: Create a temporary table based on the real table structure\n";
-                // inv_fkey_map[table][dependent.tableName][fkey_map[table][dependent.tableName][col]]
-                command << "CREATE TEMP TABLE TEMP_" << table << " AS SELECT * FROM " << table << " WHERE 1=0;\n";
+            func(command);
 
-                // Step 3: Load data into the temporary table using COPY FROM
-                command << "\\copy TEMP_" << table << " FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
-                sTable = table;
-                sCol = col;
-            }
-
-            // Step 4: Export the data from the temporary table to the output file
-            command << "-- Step 4: Export the data from the temporary table to the output file\n";
-            command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM " << dependent.tableName << " "; 
-            for(const auto& [table, col] : supporters.tableToCol) {
-                string dCol = fkey_map[table][dependent.tableName][col];
-                command << "INNER JOIN TEMP_" << table << " ON " << dependent.tableName << ".\"" << dCol << "\" = TEMP_" << table << ".\"" << col << "\" ";
-            }
-
-            command << ") TO '" << dependent.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
-            
-            // Step 5: Commit the transaction
             command << "-- Step 5: Commit the transaction\n";
             command << "COMMIT;\n";
             command << "EOF";
@@ -341,36 +317,62 @@ int main(int argc, char** argv)
             return command.str();
         };
 
-        for(auto table : query_order) {
-            if(table.name == root_table) {
-                std::ofstream outfile(fs::absolute(fs::path("query_order_results") / root_table));
-                outfile.close();
-                string psqlGetRootRowCommand = psqlGetRootRow();
-                std::cout << "Command: \n" << psqlGetRootRowCommand << '\n';
-                int command_res = system(psqlGetRootRowCommand.c_str());
-                std::cout << "Command Result: " << command_res << '\n';
-                continue;
-            } 
-            
-            CopyFromSupporters supporters;
-            for(auto supp : table.supporters) {
-                string colName = fkey_map[supp.first][table.name][supp.second];
-                string sWithRespectToD = inv_fkey_map[supp.first][table.name][colName];
-                supporters.tableToCol[supp.first] = sWithRespectToD;
-                supporters.tableToFilePath[supp.first] = fs::absolute(fs::path("query_order_results") / supp.first).string();
-            }
+        unordered_set<string> loadedToTemp;
 
-            CopyFromDependent dependent;
-            dependent.tableName = table.name;
-            dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
-            std::ofstream outfile(dependent.filePath);
-            outfile.close();
+        auto psqlCopyFrom = [&]() {
+            return psqlSourceTransaction([&](std::ostringstream& command) {           
+                for(auto table : query_order) {
+                    CopyFromSupporters supporters;
+                    for(auto supp : table.supporters) {
+                        string colName = fkey_map[supp.first][table.name][supp.second];
+                        string sWithRespectToD = inv_fkey_map[supp.first][table.name][colName];
+                        supporters.tableToCol[supp.first] = sWithRespectToD;
+                        supporters.tableToFilePath[supp.first] = fs::absolute(fs::path("query_order_results") / supp.first).string();
+                    }
 
-            auto psqlCopyFromCommand = psqlCopyFrom(supporters, dependent);
-            //std::cout << "Command: \n" << psqlCopyFromCommand << '\n';
-            int command_res = system(psqlCopyFromCommand.c_str());
-            assert(!command_res);
-        }
+                    CopyFromDependent dependent;
+                    dependent.tableName = table.name;
+                    dependent.filePath = fs::absolute(fs::path("query_order_results") / table.name).string();
+                    std::ofstream outfile(dependent.filePath);
+                    outfile.close();
+
+                    string sTable, sCol;
+                    for(const auto& [table, col] : supporters.tableToCol) {
+                        if(loadedToTemp.count(table)) continue;
+                        loadedToTemp.insert(table);
+                        // Step 2: Create a temporary table based on the real table structure
+                        command << "-- Step 2: Create a temporary table based on the real table structure\n";
+                        // inv_fkey_map[table][dependent.tableName][fkey_map[table][dependent.tableName][col]]
+                        command << "CREATE TEMP TABLE TEMP_" << table << " AS SELECT * FROM " << table << " WHERE 1=0;\n";
+
+                        // Step 3: Load data into the temporary table using COPY FROM
+                        command << "\\copy TEMP_" << table << " FROM '" << supporters.tableToFilePath[table] << "' WITH (DELIMITER '\x1F', HEADER);\n";
+                        sTable = table;
+                        sCol = col;
+                    }
+
+                    // Step 4: Export the data from the temporary table to the output file
+                    command << "-- Step 4: Export the data from the temporary table to the output file\n";
+                    command << "\\copy (SELECT \"" << dependent.tableName<< "\".* FROM " << dependent.tableName << " "; 
+                    for(const auto& [table, col] : supporters.tableToCol) {
+                        string dCol = fkey_map[table][dependent.tableName][col];
+                        command << "INNER JOIN TEMP_" << table << " ON " << dependent.tableName << ".\"" << dCol << "\" = TEMP_" << table << ".\"" << col << "\" ";
+                    }
+
+                    command << ") TO '" << dependent.filePath << "' WITH (DELIMITER '\x1F', HEADER);\n\n" ;
+                }
+                
+            });
+        };
+
+        std::ofstream outfile(fs::absolute(fs::path("query_order_results") / root_table));
+        outfile.close();
+        string psqlGetRootRowCommand = psqlGetRootRow();
+        int command_res = system(psqlGetRootRowCommand.c_str());
+
+        auto psqlCopyFromCommand = psqlCopyFrom();
+        command_res = system(psqlCopyFromCommand.c_str());
+        assert(!command_res);
 
         auto psqlCopyTo = [&config](string tableName, string filePath) {
             // Start building the psql command
@@ -392,12 +394,14 @@ int main(int argc, char** argv)
 
             return command.str();
         };
-
+        
+        /*
         for(auto table : insert_order) {
             string psqlCopyToCommand = psqlCopyTo(table.name, fs::absolute(fs::path("query_order_results") / table.name).string());
             int command_res = system(psqlCopyToCommand.c_str());
             assert(!command_res);
         }
+        */
 
 
 
