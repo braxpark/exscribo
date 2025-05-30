@@ -280,7 +280,7 @@ int main(int argc, char** argv)
         vector<Table> query_order = direct_descendants;
         query_order.insert(query_order.end(), non_direct_descendants.begin(), non_direct_descendants.end());
         vector<Table> insert_order = non_direct_descendants;
-        insert_order.insert(insert_order.begin(), direct_descendants.begin(), direct_descendants.end());
+        insert_order.insert(insert_order.end(), direct_descendants.begin(), direct_descendants.end());
 
         fs::create_directory("query_order_results");
 
